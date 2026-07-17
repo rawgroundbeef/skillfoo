@@ -2,5 +2,9 @@
 registry: github.com/rawgroundbeef/skills
 # emit defaults to .agents/skills (neutral). skillfoo also updates AGENTS.md and
 # symlinks .claude/skills/ → .agents/skills/ so Claude Code discovers them.
-# skills: omitted → sync everything in the registry. Add a list to filter.
+skills:
+  - grill
+  - prd
+  - slice
+  - pr
 
