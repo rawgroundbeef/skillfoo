@@ -1,0 +1,4 @@
+interface:
+  display_name: "TypeScript CLI"
+  short_description: "Build reliable, distributable TypeScript CLIs"
+  default_prompt: "Use $typescript-cli to build or migrate this Node CLI with production-grade TypeScript, UX, packaging, and tests."

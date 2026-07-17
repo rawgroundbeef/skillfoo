@@ -1,0 +1,25 @@
+{
+  "lockfileVersion": 1,
+  "skills": {
+    "grill": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:b493af050cb84310c95cdb93e1629fe9b2605512f3b58c63cdd067690efe34b3"
+    },
+    "pr": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:fa8e62d7e7055a28537bb1272298fcb72657c77acf56171fb92d7aacf8da8a94"
+    },
+    "prd": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:05a89a947e0dc00e16f93f4e6426f92901b0ff85075813d072b364ae070c3fc9"
+    },
+    "slice": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:d28ea9f3542773b5af819254fbf3dbcc0198b2452c7051528782639be580c575"
+    },
+    "typescript-cli": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:922ee918ee1f09585ecc26ee52a51c68132599ad13a2159722741661be3a64b2"
+    }
+  }
+}

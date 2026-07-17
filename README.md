@@ -38,8 +38,10 @@ That clones/reads the registry, writes each skill into `.agents/skills/<name>/`,
 managed `## Skills` block in `AGENTS.md`, and symlinks `.claude/skills/` so Claude Code
 discovers them. Re-running is idempotent.
 
-Commit `.skillfoo.lock` in consumer repos. It records the shared baseline that lets sync
-update clean skills while preserving locally edited and bespoke skills.
+Commit `.agents/skills/`, `AGENTS.md`, `.claude/skills/`, and `.skillfoo.lock` in consumer
+repos. Agents use those committed copies without contacting the registry; run `skillfoo sync`
+again only when intentionally upgrading. The lockfile lets sync update clean skills while
+preserving locally edited and bespoke skills.
 
 ## How it works
 
