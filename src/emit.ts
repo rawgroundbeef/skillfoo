@@ -39,14 +39,14 @@ function firstSentence(value: unknown): string {
 function buildBlock(
   emitRel: string,
   skills: ReadonlyArray<{ name: string; description: string }>,
+  includeHeading = true,
 ): string {
-  const lines = [
-    START,
-    '## Skills',
-    '',
+  const lines = [START];
+  if (includeHeading) lines.push('## Skills', '');
+  lines.push(
     `Shared agent skills live in \`${emitRel}/\` (synced by skillfoo — edit them in the source registry, not here):`,
     '',
-  ];
+  );
   for (const skill of skills) {
     lines.push(`- [${skill.name}](${emitRel}/${skill.name}/SKILL.md) — ${skill.description}`);
   }
@@ -54,24 +54,44 @@ function buildBlock(
   return lines.join('\n');
 }
 
+function appendToSkillsSection(current: string, block: string): string | null {
+  const heading = /^##[\t ]+Skills[\t ]*\r?$/m.exec(current);
+  if (heading?.index === undefined) return null;
+
+  const sectionBodyStart = heading.index + heading[0].length;
+  const followingHeading = /^##[\t ]+/m.exec(current.slice(sectionBodyStart));
+  const insertionIndex =
+    followingHeading?.index === undefined
+      ? current.length
+      : sectionBodyStart + followingHeading.index;
+  const before = current.slice(0, insertionIndex);
+  const after = current.slice(insertionIndex);
+  const beforeSeparator = before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+  const afterSeparator = after.length > 0 ? '\n\n' : '\n';
+
+  return `${before}${beforeSeparator}${block}${afterSeparator}${after}`;
+}
+
 export function updateAgentsMd(cwd: string, emitRel: string, skillNames: readonly string[]): void {
   const skills = skillNames.map((name) => ({
     name,
     description: firstSentence(frontmatter(join(cwd, emitRel, name, 'SKILL.md')).description),
   }));
-  const block = buildBlock(emitRel, skills);
   const path = join(cwd, 'AGENTS.md');
 
   let next: string;
   if (existsSync(path)) {
     const current = readFileSync(path, 'utf8');
     if (current.includes(START) && current.includes(END)) {
+      const managed = current.match(new RegExp(`${START}[\\s\\S]*?${END}`))?.[0] ?? '';
+      const block = buildBlock(emitRel, skills, /^##[\t ]+Skills[\t ]*\r?$/m.test(managed));
       next = current.replace(new RegExp(`${START}[\\s\\S]*?${END}`), () => block);
     } else {
-      next = `${current.trimEnd()}\n\n${block}\n`;
+      const block = buildBlock(emitRel, skills, false);
+      next = appendToSkillsSection(current, block) ?? `${current.trimEnd()}\n\n${buildBlock(emitRel, skills)}\n`;
     }
   } else {
-    next = `# Agents\n\n${block}\n`;
+    next = `# Agents\n\n${buildBlock(emitRel, skills)}\n`;
   }
   writeFileSync(path, next);
 }
