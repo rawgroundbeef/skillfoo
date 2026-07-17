@@ -5,9 +5,9 @@ const VERSION = '0.0.1';
 const HELP = `skillfoo — keep your agent skills in sync
 
 Usage:
-  skillfoo sync        Pull skills from the registry into this repo
-  skillfoo --help      Show this help
-  skillfoo --version   Show version
+  skillfoo sync [--force]  Pull skills from the registry into this repo
+  skillfoo --help          Show this help
+  skillfoo --version       Show version
 `;
 
 export async function run(argv) {
@@ -25,7 +25,8 @@ export async function run(argv) {
 
   if (cmd === 'sync') {
     try {
-      await sync(process.cwd());
+      const force = argv.includes('--force') || argv.includes('-f');
+      await sync(process.cwd(), { force });
     } catch (err) {
       console.error(`skillfoo: ${err.message}`);
       process.exitCode = 1;
