@@ -1,29 +1,30 @@
 import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
   existsSync,
+  mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   rmdirSync,
+  writeFileSync,
 } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { loadConfig } from './config.js';
-import { resolveRegistry } from './registry.js';
-import { updateAgentsMd, linkClaudeAdapter } from './emit.js';
-import { walkFiles, hashSkillDir } from './skilldir.js';
+import { linkClaudeAdapter, updateAgentsMd } from './emit.js';
+import type { LockFile } from './lockfile.js';
 import { readLock, writeLock } from './lockfile.js';
+import { resolveRegistry } from './registry.js';
+import { hashSkillDir, walkFiles } from './skilldir.js';
 
-// A skill is any top-level directory in the registry that holds a SKILL.md.
-function listRegistrySkills(registryDir) {
+type SyncStatus = 'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked';
+
+function listRegistrySkills(registryDir: string): string[] {
   return readdirSync(registryDir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-    .map((e) => e.name)
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
     .filter((name) => existsSync(join(registryDir, name, 'SKILL.md')));
 }
 
-// Remove empty subdirectories without ever removing the skill root itself.
-function removeEmptyDirs(dir) {
+function removeEmptyDirs(dir: string): void {
   if (!existsSync(dir)) return;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -33,61 +34,63 @@ function removeEmptyDirs(dir) {
   }
 }
 
-// Mirror a whole managed skill directory into the consumer. Byte-compare so any
-// file type is handled without mtime churn, and remove files dropped upstream.
-function mirrorSkillDir(srcDir, destDir) {
+function mirrorSkillDir(srcDir: string, destDir: string): void {
   const files = walkFiles(srcDir);
 
   if (existsSync(destDir)) {
     const wanted = new Set(files);
-    for (const rel of walkFiles(destDir)) {
-      if (!wanted.has(rel)) rmSync(join(destDir, rel), { force: true });
+    for (const relativePath of walkFiles(destDir)) {
+      if (!wanted.has(relativePath)) rmSync(join(destDir, relativePath), { force: true });
     }
     removeEmptyDirs(destDir);
   }
 
-  for (const rel of files) {
-    const next = readFileSync(join(srcDir, rel));
-    const destFile = join(destDir, rel);
-    const prev = existsSync(destFile) ? readFileSync(destFile) : null;
-    if (prev === null || !prev.equals(next)) {
+  for (const relativePath of files) {
+    const next = readFileSync(join(srcDir, relativePath));
+    const destFile = join(destDir, relativePath);
+    const previous = existsSync(destFile) ? readFileSync(destFile) : null;
+    if (previous === null || !previous.equals(next)) {
       mkdirSync(dirname(destFile), { recursive: true });
       writeFileSync(destFile, next);
     }
   }
-
-  return { fileCount: files.length };
 }
 
-/**
- * Pull the skills named in .skillfoo.yml out of the registry and mirror each
- * skill's whole directory into this repo's emit dir. Reports what changed.
- */
-export async function sync(cwd, { force = false } = {}) {
-  const cfg = loadConfig(cwd);
-
-  const registryDir = resolveRegistry(cfg.registry, cwd);
+export async function sync(cwd: string, { force = false } = {}): Promise<void> {
+  const config = loadConfig(cwd);
+  const registryDir = resolveRegistry(config.registry, cwd);
   if (!existsSync(registryDir)) {
-    throw new Error(`registry not found: ${registryDir} (registry: ${cfg.registry})`);
+    throw new Error(`registry not found: ${registryDir} (registry: ${config.registry})`);
   }
 
   const available = listRegistrySkills(registryDir);
-  const wanted = cfg.skills ?? available;
-
+  const wanted = config.skills ?? available;
   const missing = wanted.filter((name) => !available.includes(name));
-  if (missing.length) {
+  if (missing.length > 0) {
     throw new Error(
       `not in the registry: ${missing.join(', ')}\n` +
         `available: ${available.join(', ') || '(none)'}`,
     );
   }
 
-  const emitRoot = resolve(cwd, cfg.emit);
+  const emitRoot = resolve(cwd, config.emit);
   const lock = readLock(cwd);
-  const newLock = { lockfileVersion: 1, skills: {} };
-  const managed = [];
-  const mark = { added: '+', updated: '~', unchanged: '=', drifted: '!', blocked: '⊘' };
-  const tally = { added: 0, updated: 0, unchanged: 0, drifted: 0, blocked: 0 };
+  const newLock: LockFile = { lockfileVersion: 1, skills: {} };
+  const managed: string[] = [];
+  const mark: Record<SyncStatus, string> = {
+    added: '+',
+    updated: '~',
+    unchanged: '=',
+    drifted: '!',
+    blocked: '⊘',
+  };
+  const tally: Record<SyncStatus, number> = {
+    added: 0,
+    updated: 0,
+    unchanged: 0,
+    drifted: 0,
+    blocked: 0,
+  };
 
   for (const name of wanted) {
     const srcDir = join(registryDir, name);
@@ -98,8 +101,8 @@ export async function sync(cwd, { force = false } = {}) {
     const destHash = destExists ? hashSkillDir(destDir) : null;
     const fileCount = walkFiles(srcDir).length;
 
-    let status;
-    let nextHash;
+    let status: SyncStatus;
+    let nextHash: string | undefined;
     let overwroteLocalEdits = false;
 
     if (!lockHash && destExists) {
@@ -129,7 +132,10 @@ export async function sync(cwd, { force = false } = {}) {
     }
 
     if (status !== 'blocked') {
-      newLock.skills[name] = { source: cfg.registry, hash: nextHash };
+      if (nextHash === undefined) {
+        throw new Error(`internal error: no baseline hash for ${name}`);
+      }
+      newLock.skills[name] = { source: config.registry, hash: nextHash };
       managed.push(name);
     }
 
@@ -148,16 +154,18 @@ export async function sync(cwd, { force = false } = {}) {
 
   writeLock(cwd, newLock);
 
-  const n = managed.length;
-  console.log(`\nsynced ${n} skill${n === 1 ? '' : 's'} from ${cfg.registry} → ${cfg.emit}`);
+  const count = managed.length;
+  console.log(
+    `\nsynced ${count} skill${count === 1 ? '' : 's'} from ${config.registry} → ${config.emit}`,
+  );
   let summary = `${tally.added} added · ${tally.updated} updated · ${tally.unchanged} unchanged`;
-  if (tally.drifted) summary += ` · ${tally.drifted} drifted`;
-  if (tally.blocked) summary += ` · ${tally.blocked} blocked`;
+  if (tally.drifted > 0) summary += ` · ${tally.drifted} drifted`;
+  if (tally.blocked > 0) summary += ` · ${tally.blocked} blocked`;
   console.log(summary);
 
-  if (n) {
-    updateAgentsMd(cwd, cfg.emit, managed);
-    linkClaudeAdapter(cwd, cfg.emit, managed);
-    console.log(`updated AGENTS.md · linked .claude/skills/ → ${cfg.emit}/ (Claude adapter)`);
+  if (count > 0) {
+    updateAgentsMd(cwd, config.emit, managed);
+    linkClaudeAdapter(cwd, config.emit, managed);
+    console.log(`updated AGENTS.md · linked .claude/skills/ → ${config.emit}/ (Claude adapter)`);
   }
 }

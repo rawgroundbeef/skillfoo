@@ -4,16 +4,27 @@
   "description": "Keep your team's agent skills in one place, synced to every repo.",
   "type": "module",
   "bin": {
-    "skillfoo": "bin/skillfoo.js"
+    "skillfoo": "dist/entrypoint.js"
   },
   "files": [
-    "bin",
-    "src"
+    "dist"
   ],
+  "scripts": {
+    "clean": "node --eval \"require('node:fs').rmSync('dist', { recursive: true, force: true }); require('node:fs').rmSync('.test-dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/index.js",
+    "check": "npm run typecheck && npm test",
+    "prepack": "npm run build"
+  },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "~7.0.2"
   }
 }
