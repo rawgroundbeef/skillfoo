@@ -39,3 +39,20 @@ test('fails closed when a managed entry has no hash', () => {
     assert.throws(() => readLock(dir), /hash is missing or empty/);
   });
 });
+
+test('preserves prototype-shaped lock keys as own entries', () => {
+  withTempDir((dir) => {
+    writeFileSync(
+      join(dir, LOCK_NAME),
+      '{"lockfileVersion":1,"skills":{' +
+        '"__proto__":{"source":"registry","hash":"sha256:proto"},' +
+        '"safe":{"source":"registry","hash":"sha256:safe"}}}',
+    );
+
+    const lock = readLock(dir);
+    assert.equal(Object.hasOwn(lock.skills, '__proto__'), true);
+    assert.equal(lock.skills.__proto__?.hash, 'sha256:proto');
+    writeLock(dir, lock);
+    assert.equal(Object.hasOwn(readLock(dir).skills, '__proto__'), true);
+  });
+});

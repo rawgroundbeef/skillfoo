@@ -41,7 +41,9 @@ discovers them. Re-running is idempotent.
 Commit `.agents/skills/`, `AGENTS.md`, `.claude/skills/`, and `.skillfoo.lock` in consumer
 repos. Agents use those committed copies without contacting the registry; run `skillfoo sync`
 again only when intentionally upgrading. The lockfile lets sync update clean skills while
-preserving locally edited and bespoke skills.
+preserving locally edited and bespoke skills. Deselecting a previously managed skill removes
+its unchanged projections; local edits or foreign adapter content block removal and stay
+managed so skillfoo does not discard the ownership evidence needed to resolve them safely.
 
 ## How it works
 

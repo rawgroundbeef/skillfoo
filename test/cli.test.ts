@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -55,4 +55,42 @@ test('the compiled entrypoint is executable by Node', () => {
   assert.equal(result.status, 0);
   assert.equal(result.stdout, '0.0.1\n');
   assert.equal(result.stderr, '');
+});
+
+test('the compiled CLI reports a blocked removal without changing the success exit status', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo-cli-removal-'));
+  const registrySkill = resolve(root, 'registry', 'beta');
+  const consumer = resolve(root, 'consumer');
+  const entrypoint = resolve('dist/entrypoint.js');
+  try {
+    mkdirSync(registrySkill, { recursive: true });
+    mkdirSync(consumer);
+    writeFileSync(
+      resolve(registrySkill, 'SKILL.md'),
+      '---\nname: beta\ndescription: Beta guidance.\n---\n\n# Beta\n',
+    );
+    writeFileSync(
+      resolve(consumer, '.skillfoo.yml'),
+      'registry: ../registry\nskills: [beta]\n',
+    );
+    assert.equal(
+      spawnSync(process.execPath, [entrypoint, 'sync'], { cwd: consumer, encoding: 'utf8' }).status,
+      0,
+    );
+    writeFileSync(resolve(consumer, '.agents', 'skills', 'beta', 'SKILL.md'), 'local edit\n');
+    writeFileSync(
+      resolve(consumer, '.skillfoo.yml'),
+      'registry: ../registry\nskills: []\n',
+    );
+
+    const blocked = spawnSync(process.execPath, [entrypoint, 'sync'], {
+      cwd: consumer,
+      encoding: 'utf8',
+    });
+    assert.equal(blocked.status, 0);
+    assert.match(blocked.stdout, /removal blocked — local changes/);
+    assert.equal(blocked.stderr, '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
