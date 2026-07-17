@@ -1,0 +1,19 @@
+{
+  "name": "skillfoo",
+  "version": "0.0.1",
+  "description": "Keep your team's agent skills in one place, synced to every repo.",
+  "type": "module",
+  "bin": {
+    "skillfoo": "bin/skillfoo.js"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}
