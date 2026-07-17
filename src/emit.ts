@@ -48,9 +48,7 @@ function buildBlock(
     '',
   ];
   for (const skill of skills) {
-    lines.push(
-      `- [${skill.name}](${emitRel}/${skill.name}/SKILL.md) — ${firstSentence(skill.description)}`,
-    );
+    lines.push(`- [${skill.name}](${emitRel}/${skill.name}/SKILL.md) — ${skill.description}`);
   }
   lines.push(END);
   return lines.join('\n');
@@ -68,7 +66,7 @@ export function updateAgentsMd(cwd: string, emitRel: string, skillNames: readonl
   if (existsSync(path)) {
     const current = readFileSync(path, 'utf8');
     if (current.includes(START) && current.includes(END)) {
-      next = current.replace(new RegExp(`${START}[\\s\\S]*?${END}`), block);
+      next = current.replace(new RegExp(`${START}[\\s\\S]*?${END}`), () => block);
     } else {
       next = `${current.trimEnd()}\n\n${block}\n`;
     }
