@@ -26,6 +26,16 @@ export function readLock(cwd) {
   if (lock.skills != null && (typeof lock.skills !== 'object' || Array.isArray(lock.skills))) {
     throw new Error(`${LOCK_NAME} is corrupt: "skills" must be an object`);
   }
+  // Each entry must carry a usable hash: a missing/empty hash would make a
+  // managed skill read as unmanaged and silently degrade to `blocked` in sync.
+  for (const [name, entry] of Object.entries(lock.skills ?? {})) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`${LOCK_NAME} is corrupt: skills["${name}"] must be an object`);
+    }
+    if (typeof entry.hash !== 'string' || !entry.hash) {
+      throw new Error(`${LOCK_NAME} is corrupt: skills["${name}"].hash is missing or empty`);
+    }
+  }
 
   return {
     lockfileVersion: lock.lockfileVersion ?? LOCKFILE_VERSION,

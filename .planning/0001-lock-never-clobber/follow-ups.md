@@ -40,6 +40,12 @@ Real findings deferred out of this slice. Dated; specific enough to pick up cold
 
 ## Cleanup / Refactor Notes
 
+- **2026-07-17 · Redundant `walkFiles` per skill (perf).** `sync.js` walks a
+  skill's `srcDir` up to three times per iteration — inside `hashSkillDir`, again
+  for the `fileCount` display, and again inside `mirrorSkillDir` on write. Cold
+  path and registries are small, so deferred; when touched, thread one walked file
+  list through (e.g. have `hashSkillDir` return the file set) so it's walked once.
+  (Greptile P2 on PR #1.)
 - **2026-07-17 · Shared skill-dir walk.** `walkFiles` + `SKIP` currently live in
   `src/sync.js`. This slice factors them (plus `hashSkillDir`) into a shared module
   so hashing and mirroring can never diverge. Keep that module the single source
