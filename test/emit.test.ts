@@ -70,3 +70,30 @@ test('adds managed skills inside an existing skills section without changing loc
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('appends a managed skills section when the existing file has none', () => {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-no-skills-section-'));
+  const skillDir = join(root, '.agents', 'skills', 'shared');
+
+  try {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: shared\ndescription: Shared registry guidance. More detail.\n---\n',
+    );
+    writeFileSync(join(root, 'AGENTS.md'), '# Agents\n\n## Workflow\n\nKeep this section.\n');
+
+    updateAgentsMd(root, '.agents/skills', ['shared']);
+
+    const firstSync = readFileSync(join(root, 'AGENTS.md'), 'utf8');
+    assert.equal(firstSync.match(/^## Skills$/gm)?.length, 1);
+    assert.ok(firstSync.indexOf('## Workflow') < firstSync.indexOf('<!-- skillfoo:start -->'));
+    assert.match(firstSync, /## Workflow\n\nKeep this section\./);
+    assert.match(firstSync, /<!-- skillfoo:start -->[\s\S]*- \[shared\]/);
+
+    updateAgentsMd(root, '.agents/skills', ['shared']);
+    assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), firstSync);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
