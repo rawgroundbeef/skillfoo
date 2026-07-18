@@ -35,12 +35,15 @@ function publicProjection(record: ProjectionPlanRecord): Record<string, string> 
   };
 }
 
-export function renderStatusJson(plan: ReconciliationPlan): string {
+function orderedProjections(plan: ReconciliationPlan): ProjectionPlanRecord[] {
   const agents = plan.projections.filter((record) => record.kind === 'agents_md');
   const adapters = plan.projections
     .filter((record) => record.kind === 'claude_adapter')
     .sort((left, right) => compareNames(left.skill, right.skill));
+  return [...agents, ...adapters];
+}
 
+export function renderStatusJson(plan: ReconciliationPlan): string {
   return JSON.stringify(
     {
       schemaVersion: 1,
@@ -50,7 +53,7 @@ export function renderStatusJson(plan: ReconciliationPlan): string {
       skills: [...plan.skills]
         .sort((left, right) => compareNames(left.name, right.name))
         .map(publicSkill),
-      projections: [...agents, ...adapters].map(publicProjection),
+      projections: orderedProjections(plan).map(publicProjection),
       summary: plan.summary,
     },
     null,
@@ -83,11 +86,7 @@ export function renderStatusHuman(plan: ReconciliationPlan): string {
   const skillLines = [...plan.skills]
     .sort((left, right) => compareNames(left.name, right.name))
     .map(skillLine);
-  const agents = plan.projections.filter((record) => record.kind === 'agents_md');
-  const adapters = plan.projections
-    .filter((record) => record.kind === 'claude_adapter')
-    .sort((left, right) => compareNames(left.skill, right.skill));
-  const projectionLines = [...agents, ...adapters].map(projectionLine);
+  const projectionLines = orderedProjections(plan).map(projectionLine);
 
   let conclusion: string;
   if (plan.outcome === 'converged') {
