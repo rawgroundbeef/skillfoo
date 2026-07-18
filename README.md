@@ -6,8 +6,8 @@ skillfoo pulls skills from a single source-of-truth git repo — your **skills r
 into any project, as committed files an agent can read. Define a skill once; every repo
 stays in sync instead of drifting apart.
 
-> Early and evolving. Today it's a small `sync` command. On the roadmap: `init`,
-> drift/status, never-clobber reconcile, and GitHub-App PR fan-out.
+> Early and evolving. Today it provides reconciliation through `sync` and read-only
+> inspection through `status`. On the roadmap: `init` and GitHub-App PR fan-out.
 
 ## Install
 
@@ -44,6 +44,18 @@ again only when intentionally upgrading. The lockfile lets sync update clean ski
 preserving locally edited and bespoke skills. Deselecting a previously managed skill removes
 its unchanged projections; local edits or foreign adapter content block removal and stay
 managed so skillfoo does not discard the ownership evidence needed to resolve them safely.
+
+Inspect the same ordinary reconciliation plan without changing the consumer project:
+
+```sh
+skillfoo status
+skillfoo status --json
+```
+
+Status exits `0` when converged, `2` when ordinary sync can safely apply all pending work,
+`3` when at least one conflict needs attention, and `1` for usage or operational failures.
+Successful JSON output uses schema version 1 and writes only the JSON document to stdout;
+registry progress and diagnostics use stderr.
 
 ## How it works
 

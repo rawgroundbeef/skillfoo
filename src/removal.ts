@@ -1,25 +1,27 @@
+import { lstatSync, readdirSync, rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
-  lstatSync,
-  readlinkSync,
-  readdirSync,
-  rmSync,
-  unlinkSync,
-} from 'node:fs';
-import {
-  dirname,
-  isAbsolute,
-  normalize,
-  posix,
-  resolve,
-  win32,
-} from 'node:path';
+  inspectClaudeAdapter,
+  removeClaudeAdapter,
+  resolveClaudeAdapterCandidate,
+  type ClaudeAdapterCandidate,
+} from './adapter.js';
+import { assertSafeSkillName } from './skill-name.js';
 import { hashSkillDir, SKIP } from './skilldir.js';
 
-export interface ManagedRemovalCandidate {
-  name: string;
-  emittedPath: string;
-  adapterPath: string;
+export interface ManagedRemovalCandidate extends ClaudeAdapterCandidate {
+  cwd: string;
 }
+
+export type RemovalConflictReason =
+  | 'local_changes'
+  | 'unrepresented_local_structure'
+  | 'emitted_path_not_managed_directory'
+  | 'adapter_ownership_unproven';
+
+export type ManagedRemovalInspection =
+  | { status: 'safe' }
+  | { status: 'blocked'; reason: RemovalConflictReason };
 
 export type ManagedRemovalResult =
   | { status: 'removed' }
@@ -40,54 +42,15 @@ function isMissing(error: unknown): boolean {
   );
 }
 
-function isSafePathSegment(name: string): boolean {
-  if (
-    name.length === 0 ||
-    name === '.' ||
-    name === '..' ||
-    name.includes('/') ||
-    name.includes('\\') ||
-    name.includes(':') ||
-    /[\u0000-\u001f\u007f]/.test(name) ||
-    /[. ]$/.test(name)
-  ) {
-    return false;
-  }
-
-  if (posix.basename(name) !== name || win32.basename(name) !== name) return false;
-
-  const windowsStem = name.split('.')[0]?.toUpperCase();
-  return !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(windowsStem ?? '');
-}
-
-function directChild(root: string, name: string): string | null {
-  const normalizedRoot = normalize(resolve(root));
-  const candidate = normalize(resolve(normalizedRoot, name));
-  return dirname(candidate) === normalizedRoot ? candidate : null;
-}
-
-/**
- * Resolve every lock-derived removal path before any consumer mutation begins.
- * Lock keys are untrusted even though they came from a previously written lockfile.
- */
+/** Resolve every lock-derived path before any consumer mutation begins. */
 export function resolveManagedRemovalCandidates(
   cwd: string,
   emitRel: string,
   names: readonly string[],
 ): ManagedRemovalCandidate[] {
-  const emittedRoot = resolve(cwd, emitRel);
-  const adapterRoot = resolve(cwd, '.claude', 'skills');
-
   return names.map((name) => {
-    const emittedPath = isSafePathSegment(name) ? directChild(emittedRoot, name) : null;
-    const adapterPath = isSafePathSegment(name) ? directChild(adapterRoot, name) : null;
-    if (emittedPath === null || adapterPath === null) {
-      throw new Error(
-        `.skillfoo.lock is corrupt: unsafe managed skill name ${JSON.stringify(name)}; ` +
-          'expected one path segment',
-      );
-    }
-    return { name, emittedPath, adapterPath };
+    assertSafeSkillName(name, 'lock');
+    return { cwd, ...resolveClaudeAdapterCandidate(cwd, emitRel, name) };
   });
 }
 
@@ -110,7 +73,10 @@ function inspectDirectoryShape(dir: string): boolean {
   return true;
 }
 
-function inspectEmittedPath(path: string, lockedHash: string): ManagedRemovalResult | null {
+function inspectEmittedPath(
+  path: string,
+  lockedHash: string,
+): ManagedRemovalInspection | null {
   let stat;
   try {
     stat = lstatSync(path);
@@ -120,66 +86,61 @@ function inspectEmittedPath(path: string, lockedHash: string): ManagedRemovalRes
   }
 
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    return { status: 'blocked', reason: 'emitted path is not a managed directory' };
+    return { status: 'blocked', reason: 'emitted_path_not_managed_directory' };
   }
   if (!inspectDirectoryShape(path)) {
-    return { status: 'blocked', reason: 'unrepresented local structure' };
+    return { status: 'blocked', reason: 'unrepresented_local_structure' };
   }
   if (hashSkillDir(path) !== lockedHash) {
-    return { status: 'blocked', reason: 'local changes' };
+    return { status: 'blocked', reason: 'local_changes' };
   }
   return null;
 }
 
-function comparablePath(path: string): string {
-  let comparable = normalize(path);
-  if (process.platform === 'win32') {
-    comparable = comparable
-      .replace(/^\\\\\?\\UNC\\/i, '\\\\')
-      .replace(/^\\\\\?\\/i, '')
-      .toLowerCase();
+/** Inspect both owned projections without mutating either one. */
+export function inspectManagedRemoval(
+  candidate: ManagedRemovalCandidate,
+  lockedHash: string,
+): ManagedRemovalInspection {
+  const emittedBlock = inspectEmittedPath(candidate.emittedPath, lockedHash);
+  if (emittedBlock !== null) return emittedBlock;
+
+  const adapter = inspectClaudeAdapter(candidate.cwd, candidate);
+  if (adapter.status === 'foreign' || adapter.status === 'unsafe_ancestor') {
+    return { status: 'blocked', reason: 'adapter_ownership_unproven' };
   }
-  return comparable;
+  return { status: 'safe' };
 }
 
-function inspectAdapterPath(path: string, expectedTarget: string): ManagedRemovalResult | null {
-  let stat;
-  try {
-    stat = lstatSync(path);
-  } catch (error) {
-    if (isMissing(error)) return null;
-    throw error;
-  }
-
-  if (!stat.isSymbolicLink()) {
-    return { status: 'blocked', reason: 'adapter ownership cannot be proven' };
-  }
-
-  const target = readlinkSync(path);
-  const resolvedTarget = isAbsolute(target) ? normalize(target) : resolve(dirname(path), target);
-  if (comparablePath(resolvedTarget) !== comparablePath(expectedTarget)) {
-    return { status: 'blocked', reason: 'adapter ownership cannot be proven' };
-  }
-
-  return null;
+/** Execute a candidate only after inspectManagedRemoval returned safe. */
+export function executeManagedRemoval(candidate: ManagedRemovalCandidate): void {
+  removeClaudeAdapter(candidate);
+  rmSync(candidate.emittedPath, { recursive: true, force: true });
 }
 
-/** Preflight both projections and mutate neither unless both ownership checks pass. */
+const LEGACY_REASON: Record<RemovalConflictReason, ManagedRemovalResult & { status: 'blocked' }> = {
+  local_changes: { status: 'blocked', reason: 'local changes' },
+  unrepresented_local_structure: {
+    status: 'blocked',
+    reason: 'unrepresented local structure',
+  },
+  emitted_path_not_managed_directory: {
+    status: 'blocked',
+    reason: 'emitted path is not a managed directory',
+  },
+  adapter_ownership_unproven: {
+    status: 'blocked',
+    reason: 'adapter ownership cannot be proven',
+  },
+};
+
+/** Backward-compatible inspect-and-execute wrapper. */
 export function removeManagedSkill(
   candidate: ManagedRemovalCandidate,
   lockedHash: string,
 ): ManagedRemovalResult {
-  const emittedBlock = inspectEmittedPath(candidate.emittedPath, lockedHash);
-  if (emittedBlock !== null) return emittedBlock;
-
-  const adapterBlock = inspectAdapterPath(candidate.adapterPath, candidate.emittedPath);
-  if (adapterBlock !== null) return adapterBlock;
-
-  try {
-    unlinkSync(candidate.adapterPath);
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-  }
-  rmSync(candidate.emittedPath, { recursive: true, force: true });
+  const inspection = inspectManagedRemoval(candidate, lockedHash);
+  if (inspection.status === 'blocked') return LEGACY_REASON[inspection.reason];
+  executeManagedRemoval(candidate);
   return { status: 'removed' };
 }
