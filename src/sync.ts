@@ -15,6 +15,7 @@ import {
   planReconciliation,
   type ConflictReason,
   type PlanOptions,
+  type ReconciliationPlan,
   type SkillState,
 } from './plan.js';
 import { executeManagedRemoval } from './removal.js';
@@ -56,6 +57,11 @@ export interface SyncOptions extends PlanOptions {
   output?: (message: string) => void;
 }
 
+export interface SyncResult {
+  plan: ReconciliationPlan;
+  outcome: 'converged' | 'attention_required';
+}
+
 const REASON_TEXT: Record<ConflictReason, string> = {
   local_changes: 'local changes',
   unmanaged_destination: 'unmanaged destination',
@@ -64,7 +70,7 @@ const REASON_TEXT: Record<ConflictReason, string> = {
   adapter_ownership_unproven: 'adapter ownership cannot be proven',
 };
 
-export async function sync(cwd: string, options: SyncOptions = {}): Promise<void> {
+export async function sync(cwd: string, options: SyncOptions = {}): Promise<SyncResult> {
   const output = options.output ?? ((message: string) => console.log(message));
   const plan = planReconciliation(cwd, {
     force: options.force ?? false,
@@ -72,6 +78,9 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<void
     ...(options.registryCacheRoot === undefined
       ? {}
       : { registryCacheRoot: options.registryCacheRoot }),
+    ...(options.registryCatalog === undefined
+      ? {}
+      : { registryCatalog: options.registryCatalog }),
   });
 
   const tally: Record<'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked', number> = {
@@ -173,6 +182,11 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<void
       );
     }
   }
+
+  return {
+    plan,
+    outcome: plan.outcome === 'attention_required' ? 'attention_required' : 'converged',
+  };
 }
 
 function skillPresentation(state: SkillState): {

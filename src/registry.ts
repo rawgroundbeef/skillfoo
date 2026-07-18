@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -57,6 +57,12 @@ export interface RegistryOptions {
   cacheRoot?: string;
 }
 
+export interface RegistryCatalog {
+  spec: string;
+  directory: string;
+  skills: readonly string[];
+}
+
 export function resolveRegistry(spec: string, cwd: string, options: RegistryOptions = {}): string {
   if (!isGitRegistry(spec)) return resolve(cwd, spec);
 
@@ -84,4 +90,28 @@ export function resolveRegistry(spec: string, cwd: string, options: RegistryOpti
   }
 
   return dir;
+}
+
+export function listRegistrySkills(registryDir: string): string[] {
+  return readdirSync(registryDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .filter((name) => existsSync(join(registryDir, name, 'SKILL.md')))
+    .sort();
+}
+
+export function resolveRegistryCatalog(
+  spec: string,
+  cwd: string,
+  options: RegistryOptions = {},
+): RegistryCatalog {
+  const directory = resolveRegistry(spec, cwd, options);
+  if (!existsSync(directory)) {
+    throw new Error(`registry not found: ${directory} (registry: ${spec})`);
+  }
+  return {
+    spec,
+    directory,
+    skills: listRegistrySkills(directory),
+  };
 }

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -22,6 +30,31 @@ function capture(cwd = process.cwd()): {
     stdout,
     stderr,
   };
+}
+
+function writeSkill(registry: string, name: string): void {
+  const skill = resolve(registry, name);
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(
+    resolve(skill, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${name} guidance.\n---\n\n# ${name}\n`,
+  );
+}
+
+function interactiveCapture(cwd: string, answers: Array<string | null>): {
+  io: CliIO;
+  stdout: string[];
+  stderr: string[];
+  prompts: string[];
+} {
+  const output = capture(cwd);
+  const prompts: string[] = [];
+  output.io.isInputTTY = () => true;
+  output.io.readLine = async (prompt) => {
+    prompts.push(prompt);
+    return answers.shift() ?? null;
+  };
+  return { ...output, prompts };
 }
 
 test('prints version successfully', async () => {
@@ -62,6 +95,156 @@ test('shows status help without inspecting the project', async () => {
   }
 });
 
+test('shows init help without inspecting project or registry state', async () => {
+  const cwd = mkdtempSync(resolve(tmpdir(), 'skillfoo-init-help-'));
+  try {
+    const output = capture(cwd);
+    assert.equal(await run(['init', '--help'], output.io), 0);
+    assert.match(output.stdout[0] ?? '', /init <registry>/);
+    assert.match(output.stdout[0] ?? '', /--skill <name>/);
+    assert.match(output.stdout[0] ?? '', /3  project initialized/);
+    assert.deepEqual(output.stderr, []);
+    assert.deepEqual(readdirSync(cwd), []);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('strict init invocation guardrails fail before consumer writes', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo-init-guardrails-'));
+  const registry = resolve(root, 'registry');
+  const consumer = resolve(root, 'consumer');
+  try {
+    mkdirSync(registry);
+    mkdirSync(consumer);
+    writeSkill(registry, 'alpha');
+    const cases: readonly string[][] = [
+      ['init', '../registry'],
+      ['init', '../registry', '--all', '--skill', 'alpha'],
+      ['init', '../registry', '--unknown'],
+      ['init', '../registry', '--skill'],
+      ['init', '../registry', 'extra', '--all'],
+      ['init', '--all'],
+    ];
+
+    for (const argv of cases) {
+      const output = capture(consumer);
+      assert.equal(await run(argv, output.io), 1, argv.join(' '));
+      assert.deepEqual(output.stdout, [], argv.join(' '));
+      assert.equal(output.stderr.length, 1, argv.join(' '));
+      assert.deepEqual(readdirSync(consumer), [], argv.join(' '));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('initializes explicit selections without prompting', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo-init-explicit-'));
+  const registry = resolve(root, 'registry');
+  const consumer = resolve(root, 'consumer');
+  try {
+    mkdirSync(registry);
+    mkdirSync(consumer);
+    writeSkill(registry, 'alpha');
+    writeSkill(registry, 'beta');
+    const output = capture(consumer);
+    output.io.readLine = async () => assert.fail('explicit init must not prompt');
+
+    assert.equal(
+      await run(
+        ['init', '../registry', '--skill', 'beta', '--skill', 'alpha', '--emit', 'tools/skills'],
+        output.io,
+      ),
+      0,
+    );
+    assert.equal(
+      readFileSync(resolve(consumer, '.skillfoo.yml'), 'utf8'),
+      'registry: ../registry\nemit: tools/skills\nskills:\n  - beta\n  - alpha\n',
+    );
+    assert.equal(existsSync(resolve(consumer, 'tools', 'skills', 'alpha', 'SKILL.md')), true);
+    assert.match(output.stdout.at(-1) ?? '', /created \.skillfoo\.yml.*converged/s);
+    assert.deepEqual(output.stderr, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('interactive init retries exact selections and cancellation writes nothing', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo-init-interactive-'));
+  const registry = resolve(root, 'registry');
+  const consumer = resolve(root, 'consumer');
+  const cancelled = resolve(root, 'cancelled');
+  try {
+    mkdirSync(registry);
+    mkdirSync(consumer);
+    mkdirSync(cancelled);
+    writeSkill(registry, 'beta');
+    writeSkill(registry, 'alpha');
+
+    const output = interactiveCapture(consumer, ['', 'missing', 'beta, alpha']);
+    assert.equal(await run(['init', '../registry'], output.io), 0);
+    assert.match(output.stdout[0] ?? '', /Available skills:\n  alpha\n  beta/);
+    assert.equal(output.stderr.length, 2);
+    assert.equal(output.prompts.length, 3);
+    assert.match(
+      readFileSync(resolve(consumer, '.skillfoo.yml'), 'utf8'),
+      /skills:\n  - beta\n  - alpha\n$/,
+    );
+
+    const cancelledOutput = interactiveCapture(cancelled, [null]);
+    assert.equal(await run(['init', '../registry'], cancelledOutput.io), 1);
+    assert.match(cancelledOutput.stderr.at(-1) ?? '', /cancelled.*no files were written/);
+    assert.deepEqual(readdirSync(cancelled), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('init maps a preserved bespoke conflict to attention required', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo-init-conflict-'));
+  const registry = resolve(root, 'registry');
+  const consumer = resolve(root, 'consumer');
+  const bespoke = resolve(consumer, '.agents', 'skills', 'alpha', 'SKILL.md');
+  try {
+    mkdirSync(registry);
+    mkdirSync(resolve(consumer, '.agents', 'skills', 'alpha'), { recursive: true });
+    writeSkill(registry, 'alpha');
+    writeFileSync(bespoke, 'bespoke\n');
+    const output = capture(consumer);
+
+    assert.equal(await run(['init', '../registry', '--skill', 'alpha'], output.io), 3);
+    assert.equal(readFileSync(bespoke, 'utf8'), 'bespoke\n');
+    assert.equal(existsSync(resolve(consumer, '.skillfoo.yml')), true);
+    assert.match(output.stdout.at(-1) ?? '', /needs attention.*status.*sync/s);
+    assert.deepEqual(output.stderr, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('init reports retained config when first reconciliation fails operationally', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo-init-operation-failure-'));
+  const registry = resolve(root, 'registry');
+  const consumer = resolve(root, 'consumer');
+  try {
+    mkdirSync(registry);
+    mkdirSync(consumer);
+    writeSkill(registry, 'alpha');
+    writeFileSync(resolve(consumer, '.skillfoo.lock'), 'invalid json\n');
+    const output = capture(consumer);
+
+    assert.equal(await run(['init', '../registry', '--skill', 'alpha'], output.io), 1);
+    assert.deepEqual(output.stdout, []);
+    assert.match(output.stderr[0] ?? '', /created \.skillfoo\.yml.*reconciliation failed/s);
+    assert.match(output.stderr[1] ?? '', /configuration was kept.*status.*sync/s);
+    assert.equal(existsSync(resolve(consumer, '.skillfoo.yml')), true);
+    assert.equal(readFileSync(resolve(consumer, '.skillfoo.lock'), 'utf8'), 'invalid json\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('status failures leave stdout empty, including in JSON mode', async () => {
   const cwd = mkdtempSync(resolve(tmpdir(), 'skillfoo-status-failure-'));
   try {
@@ -79,12 +262,66 @@ test('status failures leave stdout empty, including in JSON mode', async () => {
   }
 });
 
+test('status and sync reject unsafe manual emit config before registry access', async () => {
+  const cwd = mkdtempSync(resolve(tmpdir(), 'skillfoo-unsafe-emit-'));
+  try {
+    writeFileSync(
+      resolve(cwd, '.skillfoo.yml'),
+      'registry: https://example.invalid/unreachable.git\nemit: ../outside\n',
+    );
+    const before = readFileSync(resolve(cwd, '.skillfoo.yml'));
+
+    for (const command of ['status', 'sync']) {
+      const output = capture(cwd);
+      assert.equal(await run([command], output.io), 1);
+      assert.deepEqual(output.stdout, []);
+      assert.match(output.stderr[0] ?? '', /emit.*escape/);
+      assert.deepEqual(readFileSync(resolve(cwd, '.skillfoo.yml')), before);
+      assert.deepEqual(readdirSync(cwd), ['.skillfoo.yml']);
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('the compiled entrypoint is executable by Node', () => {
   const entrypoint = resolve('dist/entrypoint.js');
   const result = spawnSync(process.execPath, [entrypoint, '--version'], { encoding: 'utf8' });
   assert.equal(result.status, 0);
   assert.equal(result.stdout, '0.0.1\n');
   assert.equal(result.stderr, '');
+});
+
+test('the compiled CLI initializes a non-ASCII path and keeps failures on stderr', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'skillfoo compiled ünicode '));
+  const registry = resolve(root, 'skills registry');
+  const consumer = resolve(root, 'consumer project');
+  const entrypoint = resolve('dist/entrypoint.js');
+  try {
+    mkdirSync(registry);
+    mkdirSync(consumer);
+    writeSkill(registry, 'alpha');
+
+    const initialized = spawnSync(
+      process.execPath,
+      [entrypoint, 'init', '../skills registry', '--skill', 'alpha'],
+      { cwd: consumer, encoding: 'utf8' },
+    );
+    assert.equal(initialized.status, 0);
+    assert.equal(initialized.stderr, '');
+    assert.match(initialized.stdout, /Project initialized:.*converged/s);
+
+    const rerun = spawnSync(
+      process.execPath,
+      [entrypoint, 'init', '../skills registry', '--all'],
+      { cwd: consumer, encoding: 'utf8' },
+    );
+    assert.equal(rerun.status, 1);
+    assert.equal(rerun.stdout, '');
+    assert.match(rerun.stderr, /already exists.*status.*sync/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the compiled CLI reports a blocked removal without changing the success exit status', () => {

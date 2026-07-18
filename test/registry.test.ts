@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { planReconciliation } from '../src/plan.js';
+import { listRegistrySkills, resolveRegistryCatalog } from '../src/registry.js';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -26,6 +27,28 @@ function writeSkill(registry: string, description: string): void {
     `---\nname: alpha\ndescription: ${description}\n---\n\n# Alpha\n`,
   );
 }
+
+test('catalogs only skill directories in deterministic name order', () => {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-registry-catalog-'));
+  try {
+    for (const name of ['beta', 'alpha', 'gamma', '.hidden']) {
+      mkdirSync(join(root, name));
+    }
+    writeFileSync(join(root, 'beta', 'SKILL.md'), 'beta\n');
+    writeFileSync(join(root, 'alpha', 'SKILL.md'), 'alpha\n');
+    writeFileSync(join(root, '.hidden', 'SKILL.md'), 'hidden\n');
+    writeFileSync(join(root, 'file'), 'not a skill directory\n');
+
+    assert.deepEqual(listRegistrySkills(root), ['alpha', 'beta']);
+    assert.deepEqual(resolveRegistryCatalog('.', root), {
+      spec: '.',
+      directory: root,
+      skills: ['alpha', 'beta'],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('refreshes a Git registry only through an isolated private cache', () => {
   const root = mkdtempSync(join(tmpdir(), 'skillfoo-git-registry-'));

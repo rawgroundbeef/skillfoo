@@ -10,4 +10,6 @@ Shared agent skills live in `.agents/skills/` (synced by skillfoo — edit them 
 - [slice](.agents/skills/slice/SKILL.md) — Vertical-slice planning pipeline that turns rough requirements into slice-local discovery, decisions, UAT, PRD, follow-ups, and a bootstrap prompt before implementation.
 - [pr](.agents/skills/pr/SKILL.md) — Write a human-readable PR title and description from the final diff (never from the conversation), open or update the pull request, and triage review feedback into address / defer / dismiss.
 - [typescript-cli](.agents/skills/typescript-cli/SKILL.md) — Build, migrate, or review reliable Node.js command-line applications in TypeScript.
+- [review](.agents/skills/review/SKILL.md) — Review a branch, pull request, commit range, working-tree diff, or selected files for correctness, architecture, security, performance, maintainability, and testing risks.
+- [uat](.agents/skills/uat/SKILL.md) — Create concise, executable manual user-acceptance test plans from requirements, planning artifacts, a diff, branch, pull request, or working implementation.
 <!-- skillfoo:end -->

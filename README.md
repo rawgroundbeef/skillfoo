@@ -6,8 +6,8 @@ skillfoo pulls skills from a single source-of-truth git repo — your **skills r
 into any project, as committed files an agent can read. Define a skill once; every repo
 stays in sync instead of drifting apart.
 
-> Early and evolving. Today it provides reconciliation through `sync` and read-only
-> inspection through `status`. On the roadmap: `init` and GitHub-App PR fan-out.
+> Early and evolving. Today it provides local project initialization, safe reconciliation,
+> and read-only status. GitHub-App PR fan-out remains on the roadmap.
 
 ## Install
 
@@ -18,9 +18,34 @@ git clone https://github.com/rawgroundbeef/skillfoo
 cd skillfoo && npm install && npm link   # gives you a global `skillfoo`
 ```
 
-## Usage
+## Quickstart
 
-Add a `.skillfoo.yml` to any repo:
+Connect an empty project to a local or Git-backed registry and choose its desired skills:
+
+```sh
+skillfoo init github.com/your-org/skills --skill slice --skill pr
+```
+
+`init` validates the registry and selection, creates `.skillfoo.yml`, and immediately runs
+the first ordinary safe reconciliation. Repeat `--skill` to preserve an explicit desired
+order, or use `--all` to desire every current and future registry skill:
+
+```sh
+skillfoo init ../skills-registry --all
+skillfoo init ../skills-registry --skill slice --emit tools/agent-skills
+```
+
+When run in a terminal without `--skill` or `--all`, init lists the available skills and
+prompts for exact comma-separated names or `all`. Non-interactive use must always provide
+one of those selection flags. Init never replaces an existing `.skillfoo.yml`.
+
+Init exits `0` only when the first reconciliation finishes converged, `3` when it preserves
+a conflict that needs attention, and `1` for usage or operational failure. If reconciliation
+fails after config creation, the valid config is retained so `status` and `sync` can recover.
+
+## Configuration reference
+
+Projects may also author `.skillfoo.yml` directly:
 
 ```yaml
 registry: github.com/your-org/skills   # a local path or a git URL
@@ -28,7 +53,12 @@ registry: github.com/your-org/skills   # a local path or a git URL
 # skills: [slice, pr]                  # optional — omit to sync everything
 ```
 
-Then:
+`emit` must be a non-empty relative path contained by the project. Existing path ancestors
+must be real directories, not symlinks, junctions, files, or special entries.
+
+## Reconciliation
+
+After initialization, reconcile the configured desired policy at any time:
 
 ```sh
 skillfoo sync
