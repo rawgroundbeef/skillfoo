@@ -6,5 +6,6 @@ import './lockfile.test.js';
 import './plan.test.js';
 import './registry.test.js';
 import './removal.test.js';
+import './resolve.test.js';
 import './status.test.js';
 import './sync.test.js';

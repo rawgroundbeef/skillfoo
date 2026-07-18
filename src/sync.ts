@@ -73,7 +73,6 @@ const REASON_TEXT: Record<ConflictReason, string> = {
 export async function sync(cwd: string, options: SyncOptions = {}): Promise<SyncResult> {
   const output = options.output ?? ((message: string) => console.log(message));
   const plan = planReconciliation(cwd, {
-    force: options.force ?? false,
     registryReporter: options.registryReporter ?? output,
     ...(options.registryCacheRoot === undefined
       ? {}
@@ -126,11 +125,9 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<Sync
       note =
         record.reason === 'emitted_path_not_managed_directory'
           ? '  (drifted — emitted path is not a managed directory; local content kept)'
-          : '  (drifted — local edits kept; run with --force to overwrite)';
+          : `  (drifted — local edits kept; run skillfoo resolve ${record.name} --take-registry to discard them)`;
     } else if (record.state === 'blocked') {
       note = '  (unowned content is here; remove it to let skillfoo manage this skill)';
-    } else if (record.overwritesLocalEdits === true) {
-      note = '  (overwrote local edits)';
     } else if (record.state === 'lock_update') {
       note = '  (updated lock metadata)';
     }

@@ -3,7 +3,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { LOCK_NAME, readLock, writeLock } from '../src/lockfile.js';
+import {
+  compareAndSetLockEntry,
+  LOCK_NAME,
+  readLock,
+  writeLock,
+} from '../src/lockfile.js';
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'skillfoo-lock-'));
@@ -54,5 +59,47 @@ test('preserves prototype-shaped lock keys as own entries', () => {
     assert.equal(lock.skills.__proto__?.hash, 'sha256:proto');
     writeLock(dir, lock);
     assert.equal(Object.hasOwn(readLock(dir).skills, '__proto__'), true);
+  });
+});
+
+test('compare-and-set updates one target while preserving unrelated entries', () => {
+  withTempDir((dir) => {
+    const alpha = { source: 'old', hash: 'sha256:alpha-old' };
+    const beta = { source: 'registry', hash: 'sha256:beta' };
+    writeLock(dir, { lockfileVersion: 1, skills: { alpha, beta } });
+
+    compareAndSetLockEntry(dir, 'alpha', alpha, {
+      source: 'registry',
+      hash: 'sha256:alpha-new',
+    });
+
+    assert.deepEqual(readLock(dir), {
+      lockfileVersion: 1,
+      skills: {
+        alpha: { source: 'registry', hash: 'sha256:alpha-new' },
+        beta,
+      },
+    });
+  });
+});
+
+test('compare-and-set refuses stale target evidence without changing the lock', () => {
+  withTempDir((dir) => {
+    writeLock(dir, {
+      lockfileVersion: 1,
+      skills: { alpha: { source: 'registry', hash: 'sha256:current' } },
+    });
+    const before = readFileSync(join(dir, LOCK_NAME));
+    assert.throws(
+      () =>
+        compareAndSetLockEntry(
+          dir,
+          'alpha',
+          { source: 'registry', hash: 'sha256:stale' },
+          { source: 'registry', hash: 'sha256:new' },
+        ),
+      /stale lock evidence/,
+    );
+    assert.deepEqual(readFileSync(join(dir, LOCK_NAME)), before);
   });
 });

@@ -223,9 +223,9 @@ test('retains every projection and prior row when local edits block removal', as
   const editedBytes = readFileSync(emitted);
   configure(state.consumer, []);
 
-  for (const force of [false, false, true]) {
+  for (let run = 0; run < 3; run++) {
     state.output.length = 0;
-    await sync(state.consumer, { force });
+    await sync(state.consumer);
     assert.ok(
       state.output.some((line) =>
         line.includes('⊘ beta  (removal blocked — local changes)'),

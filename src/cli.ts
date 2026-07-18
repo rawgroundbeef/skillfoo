@@ -6,6 +6,7 @@ import {
   type InitSelection,
 } from './init.js';
 import { planReconciliation } from './plan.js';
+import { resolveSkill, type ResolutionResult } from './resolve.js';
 import { isSafeSkillName } from './skill-name.js';
 import { renderStatusHuman, renderStatusJson, statusExitCode } from './status.js';
 import { sync } from './sync.js';
@@ -17,10 +18,41 @@ const HELP = `skillfoo — keep your agent skills in sync
 Usage:
   skillfoo init <registry> [--skill <name> ... | --all] [--emit <path>]
                            Connect this repo and run its first safe sync
-  skillfoo sync [--force]   Pull skills from the registry into this repo
+  skillfoo sync             Pull safe changes from the registry into this repo
+  skillfoo resolve <skill> --take-registry
+                           Discard one Managed skill's local edits
   skillfoo status [--json]  Inspect whether ordinary sync is needed
   skillfoo --help           Show this help
   skillfoo --version        Show version
+`;
+
+const SYNC_HELP = `skillfoo sync — apply ordinary safe reconciliation
+
+Usage:
+  skillfoo sync
+
+Options:
+  --help  Show this help
+
+Locally edited Managed skills are preserved. Resolve one explicitly with
+skillfoo resolve <skill> --take-registry.
+`;
+
+const RESOLVE_HELP = `skillfoo resolve — resolve one local-edit conflict
+
+Usage:
+  skillfoo resolve <skill> --take-registry
+
+Options:
+  --take-registry  Replace the named Managed skill with the registry tree,
+                   permanently discarding its local edits
+  --help           Show this help
+
+Outcomes and exit statuses:
+  0  target resolved and repository converged
+  1  usage, refusal, stale evidence, rollback, or operational failure
+  2  target resolved, but unrelated safe changes remain
+  3  target resolved, but another conflict remains
 `;
 
 const INIT_HELP = `skillfoo init — connect this repo to a skills registry
@@ -113,6 +145,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function renderResolution(result: ResolutionResult): string {
+  const first =
+    result.action === 'replaced'
+      ? `Resolved ${result.skill}: the registry version won and local edits were discarded.`
+      : `No change for ${result.skill}: this Managed skill already matches the current registry.`;
+  if (result.exitCode === 0) return `${first}\nRepository is converged.`;
+  if (result.exitCode === 2) {
+    return `${first}\nUnrelated safe changes remain; run skillfoo sync to apply them.`;
+  }
+  return `${first}\nAnother conflict remains; run skillfoo status to inspect it.`;
+}
+
 async function promptForSelection(
   available: readonly string[],
   io: CliIO,
@@ -169,9 +213,56 @@ export async function run(argv: readonly string[], io: CliIO = processIO): Promi
 
   if (cmd === 'sync') {
     try {
-      const force = argv.includes('--force') || argv.includes('-f');
-      await sync(io.cwd(), { force, output: io.stdout, registryReporter: io.stdout });
+      const parsed = parseArgs({
+        args: argv.slice(1),
+        allowPositionals: false,
+        strict: true,
+        options: {
+          help: { type: 'boolean', short: 'h' },
+        },
+      });
+      if (parsed.values.help === true) {
+        io.stdout(SYNC_HELP);
+        return 0;
+      }
+      await sync(io.cwd(), { output: io.stdout, registryReporter: io.stdout });
       return 0;
+    } catch (error) {
+      io.stderr(`skillfoo: ${errorMessage(error)}`);
+      return 1;
+    }
+  }
+
+  if (cmd === 'resolve') {
+    try {
+      const parsed = parseArgs({
+        args: argv.slice(1),
+        allowPositionals: true,
+        strict: true,
+        options: {
+          'take-registry': { type: 'boolean', multiple: true },
+          help: { type: 'boolean', short: 'h' },
+        },
+      });
+      if (parsed.values.help === true) {
+        io.stdout(RESOLVE_HELP);
+        return 0;
+      }
+      if (parsed.positionals.length !== 1) {
+        throw new Error('resolve requires exactly one <skill> positional argument');
+      }
+      const directions = parsed.values['take-registry'];
+      if (directions === undefined || directions.length !== 1) {
+        throw new Error('resolve requires --take-registry exactly once');
+      }
+      const skill = parsed.positionals[0];
+      if (skill === undefined || !isSafeSkillName(skill)) {
+        throw new Error(`unsafe skill name ${JSON.stringify(skill ?? '')}; expected one path segment`);
+      }
+
+      const result = resolveSkill(io.cwd(), skill, { registryReporter: io.stderr });
+      io.stdout(renderResolution(result));
+      return result.exitCode;
     } catch (error) {
       io.stderr(`skillfoo: ${errorMessage(error)}`);
       return 1;

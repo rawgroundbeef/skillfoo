@@ -7,7 +7,8 @@ into any project, as committed files an agent can read. Define a skill once; eve
 stays in sync instead of drifting apart.
 
 > Early and evolving. Today it provides local project initialization, safe reconciliation,
-> and read-only status. GitHub-App PR fan-out remains on the roadmap.
+> read-only status, and targeted resolution of locally edited Managed skills. GitHub-App PR
+> fan-out remains on the roadmap.
 
 ## Install
 
@@ -86,6 +87,46 @@ Status exits `0` when converged, `2` when ordinary sync can safely apply all pen
 `3` when at least one conflict needs attention, and `1` for usage or operational failures.
 Successful JSON output uses schema version 1 and writes only the JSON document to stdout;
 registry progress and diagnostics use stderr.
+
+### Resolve one local-edit conflict
+
+When status reports a Managed skill as `drifted` because of `local_changes`, explicitly take
+the current registry version for that skill only:
+
+```sh
+skillfoo resolve slice --take-registry
+```
+
+This is destructive: it permanently discards local edits and local-only files inside the
+named skill. The explicit skill name and `--take-registry` direction are both required; the
+command is non-interactive and accepts no broad-force or confirmation aliases.
+
+Resolution replaces only the named Desired, Managed skill, advances only its lock entry,
+updates only its managed `AGENTS.md` row, and creates its Claude adapter only when missing.
+Unrelated safe updates and conflicts remain untouched. A foreign or unsafe target adapter is
+preserved as a separate conflict rather than being claimed by the content-resolution choice.
+
+The replacement is staged and verified first. During mutation, skillfoo keeps a temporary
+recovery copy and restores the prior target-dependent state after a handled failure. A failed
+rollback reports the exact retained recovery path; a successful resolution leaves no backup
+or transaction artifact.
+
+Running the same resolver again is a successful no-op only when the still-Managed skill
+content and canonical lock baseline already match the current registry. Safe updates,
+lock-only updates, removal candidates, Bespoke collisions, unsafe paths, and other conflict
+reasons are refused without consumer writes; inspect those cases with `skillfoo status` and
+apply safe work with `skillfoo sync`.
+
+Successful resolution output goes to stdout and reports the remaining repository outcome:
+
+- `0` — the target resolved and the repository is converged.
+- `2` — the target resolved, but unrelated safe changes remain; run `skillfoo sync`.
+- `3` — the target resolved, but another conflict remains; run `skillfoo status`.
+- `1` — invalid syntax, refusal, stale evidence, rollback trouble, or operational failure;
+  no successful resolution was committed.
+
+The former repository-wide `skillfoo sync --force` and `skillfoo sync -f` forms are removed.
+They fail as invalid usage and are never reinterpreted as ordinary sync.
 
 ## How it works
 

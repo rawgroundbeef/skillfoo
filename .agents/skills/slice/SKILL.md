@@ -9,8 +9,8 @@ Use this as the planning-to-implementation pipeline for one coherent vertical
 slice. The artifacts are the source of truth; do not rely on conversation
 memory once an artifact exists.
 
-Companion skills this pipeline loads: `$grill`, `$uat`, `$prd` (and a
-repo-specific `threat-model` skill when the repo has one). Repo-specific
+Companion skills this pipeline loads: `$grill`, `$uat`, `$prd`, `$review` (and
+a repo-specific `threat-model` skill when the repo has one). Repo-specific
 conventions — the integration branch name, verification gates, code layout, and
 which zone skills to load — come from the repo's `AGENTS.md`.
 
@@ -205,12 +205,34 @@ earlier request broadly authorized the slice. Wait for the handoff into a fresh
 context; the adversarial pass and the human-facing pass report are both required
 planning gates.
 
-### 7. Clear context and implement
+### 7. Clear context, implement, and review
 
 Only after the adversarial review passes and the human has been told, start
 implementation from `.planning/{NNNN-feature-slug}/bootstrap.md` in a fresh
 context. If the docs are insufficient to implement cold, update the docs instead
 of relying on remembered conversation.
+
+Complete the implementation and run the repository's verification gates from
+`AGENTS.md`. Then spawn a fresh-context subagent, load `$review` in that
+subagent, and review the implementation branch or diff against its integration
+branch. Give the reviewer the bootstrap path and raw review scope; do not give
+it the implementation agent's conclusions or ask it to fix its own findings.
+The implementation agent must not substitute a same-context self-review when a
+review subagent is available.
+
+Route the review result as follows:
+
+- Address every **Request changes** finding in the implementation context, rerun
+  the verification gates, and spawn another fresh `$review` pass over the
+  revised diff.
+- Preserve accepted non-blocking findings in the slice's `follow-ups.md` using
+  the `$review` skill's durable-follow-up rules.
+- If a review subagent is unavailable, run `$review` in the implementation
+  context and explicitly disclose that the review was not independent.
+
+Do not hand off the implementation until the latest review returns **APPROVE**
+with no Request changes findings. Report the review scope, verdict, verification
+results, and any remaining warnings to the human.
 
 ## Follow-ups
 
@@ -265,5 +287,6 @@ bootstrap agree on scope, terms, acceptance, non-goals, and branch order, and
 the adversarial review has stopped producing blocking findings. Planning is
 ready for handoff only after that passing result has been reported to the human.
 
-Implementation is ready for handoff only after the relevant code is complete
-and the repo's verification gates (from `AGENTS.md`) pass.
+Implementation is ready for handoff only after the relevant code is complete,
+the repo's verification gates (from `AGENTS.md`) pass, and the latest `$review`
+pass returns **APPROVE** with no Request changes findings.
