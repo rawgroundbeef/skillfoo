@@ -7,23 +7,18 @@ import {
   rmdirSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { loadConfig } from './config.js';
-import { linkClaudeAdapter, updateAgentsMd } from './emit.js';
-import type { LockFile } from './lockfile.js';
-import { readLock, setLockEntry, writeLock } from './lockfile.js';
-import { removeManagedSkill, resolveManagedRemovalCandidates } from './removal.js';
-import { resolveRegistry } from './registry.js';
-import { hashSkillDir, walkFiles } from './skilldir.js';
-
-type SyncStatus = 'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked';
-
-function listRegistrySkills(registryDir: string): string[] {
-  return readdirSync(registryDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((entry) => entry.name)
-    .filter((name) => existsSync(join(registryDir, name, 'SKILL.md')));
-}
+import { dirname, join } from 'node:path';
+import { createClaudeAdapter } from './adapter.js';
+import { writeAgentsMd } from './emit.js';
+import { writeLock } from './lockfile.js';
+import {
+  planReconciliation,
+  type ConflictReason,
+  type PlanOptions,
+  type SkillState,
+} from './plan.js';
+import { executeManagedRemoval } from './removal.js';
+import { walkFiles } from './skilldir.js';
 
 function removeEmptyDirs(dir: string): void {
   if (!existsSync(dir)) return;
@@ -57,140 +52,147 @@ function mirrorSkillDir(srcDir: string, destDir: string): void {
   }
 }
 
-export async function sync(cwd: string, { force = false } = {}): Promise<void> {
-  const config = loadConfig(cwd);
-  const registryDir = resolveRegistry(config.registry, cwd);
-  if (!existsSync(registryDir)) {
-    throw new Error(`registry not found: ${registryDir} (registry: ${config.registry})`);
-  }
+export interface SyncOptions extends PlanOptions {
+  output?: (message: string) => void;
+}
 
-  const available = listRegistrySkills(registryDir);
-  const wanted = config.skills ?? available;
-  const missing = wanted.filter((name) => !available.includes(name));
-  if (missing.length > 0) {
-    throw new Error(
-      `not in the registry: ${missing.join(', ')}\n` +
-        `available: ${available.join(', ') || '(none)'}`,
-    );
-  }
+const REASON_TEXT: Record<ConflictReason, string> = {
+  local_changes: 'local changes',
+  unmanaged_destination: 'unmanaged destination',
+  unrepresented_local_structure: 'unrepresented local structure',
+  emitted_path_not_managed_directory: 'emitted path is not a managed directory',
+  adapter_ownership_unproven: 'adapter ownership cannot be proven',
+};
 
-  const emitRoot = resolve(cwd, config.emit);
-  const lock = readLock(cwd);
-  const removalNames = Object.keys(lock.skills).filter((name) => !wanted.includes(name));
-  const removalCandidates = resolveManagedRemovalCandidates(cwd, config.emit, removalNames);
-  const newLock: LockFile = { lockfileVersion: 1, skills: {} };
-  const activeManaged: string[] = [];
-  const retainedManaged: string[] = [];
-  const mark: Record<SyncStatus, string> = {
-    added: '+',
-    updated: '~',
-    unchanged: '=',
-    drifted: '!',
-    blocked: '⊘',
-  };
-  const tally: Record<SyncStatus, number> = {
+export async function sync(cwd: string, options: SyncOptions = {}): Promise<void> {
+  const output = options.output ?? ((message: string) => console.log(message));
+  const plan = planReconciliation(cwd, {
+    force: options.force ?? false,
+    registryReporter: options.registryReporter ?? output,
+    ...(options.registryCacheRoot === undefined
+      ? {}
+      : { registryCacheRoot: options.registryCacheRoot }),
+  });
+
+  const tally: Record<'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked', number> = {
     added: 0,
     updated: 0,
     unchanged: 0,
     drifted: 0,
     blocked: 0,
   };
-
-  for (const name of wanted) {
-    const srcDir = join(registryDir, name);
-    const destDir = join(emitRoot, name);
-    const registryHash = hashSkillDir(srcDir);
-    const lockHash = lock.skills[name]?.hash;
-    const destExists = existsSync(destDir) && walkFiles(destDir).length > 0;
-    const destHash = destExists ? hashSkillDir(destDir) : null;
-    const fileCount = walkFiles(srcDir).length;
-
-    let status: SyncStatus;
-    let nextHash: string | undefined;
-    let overwroteLocalEdits = false;
-
-    if (!lockHash && destExists) {
-      status = 'blocked';
-    } else if (!destExists) {
-      status = 'added';
-      mirrorSkillDir(srcDir, destDir);
-      nextHash = registryHash;
-    } else if (destHash === lockHash && registryHash === lockHash) {
-      status = 'unchanged';
-      nextHash = lockHash;
-    } else if (destHash === lockHash) {
-      status = 'updated';
-      mirrorSkillDir(srcDir, destDir);
-      nextHash = registryHash;
-    } else if (destHash === registryHash) {
-      status = 'unchanged';
-      nextHash = registryHash;
-    } else if (force) {
-      status = 'updated';
-      overwroteLocalEdits = true;
-      mirrorSkillDir(srcDir, destDir);
-      nextHash = registryHash;
-    } else {
-      status = 'drifted';
-      nextHash = lockHash;
-    }
-
-    if (status !== 'blocked') {
-      if (nextHash === undefined) {
-        throw new Error(`internal error: no baseline hash for ${name}`);
-      }
-      setLockEntry(newLock.skills, name, { source: config.registry, hash: nextHash });
-      activeManaged.push(name);
-    }
-
-    tally[status]++;
-    const files = fileCount > 1 ? ` (${fileCount} files)` : '';
-    let note = '';
-    if (status === 'drifted') {
-      note = '  (drifted — local edits kept; run with --force to overwrite)';
-    } else if (status === 'blocked') {
-      note = '  (an untracked directory is here; remove it to let skillfoo manage this skill)';
-    } else if (overwroteLocalEdits) {
-      note = '  (overwrote local edits)';
-    }
-    console.log(`  ${mark[status]} ${name}${files}${note}`);
-  }
-
   let removed = 0;
   let removalBlocked = 0;
-  for (const candidate of removalCandidates) {
-    const previous = lock.skills[candidate.name];
-    if (previous === undefined) {
-      throw new Error(`internal error: no locked baseline for ${candidate.name}`);
-    }
-    const result = removeManagedSkill(candidate, previous.hash);
-    if (result.status === 'removed') {
+
+  for (const record of plan.skills) {
+    if (record.state === 'remove') {
+      if (record.removalCandidate === undefined) {
+        throw new Error(`internal error: no removal candidate for ${record.name}`);
+      }
+      executeManagedRemoval(record.removalCandidate);
       removed++;
-      console.log(`  - ${candidate.name}`);
-    } else {
+      output(`  - ${record.name}`);
+      continue;
+    }
+
+    if (record.state === 'removal_blocked') {
       removalBlocked++;
-      setLockEntry(newLock.skills, candidate.name, previous);
-      retainedManaged.push(candidate.name);
-      console.log(`  ⊘ ${candidate.name}  (removal blocked — ${result.reason})`);
+      const reason = record.reason === undefined ? 'ownership cannot be proven' : REASON_TEXT[record.reason];
+      output(`  ⊘ ${record.name}  (removal blocked — ${reason})`);
+      continue;
+    }
+
+    if (record.state === 'add' || record.state === 'update') {
+      if (record.sourceDir === undefined || record.destinationDir === undefined) {
+        throw new Error(`internal error: no content action paths for ${record.name}`);
+      }
+      mirrorSkillDir(record.sourceDir, record.destinationDir);
+    }
+
+    const presentation = skillPresentation(record.state);
+    tally[presentation.tally]++;
+    const files = record.fileCount > 1 ? ` (${record.fileCount} files)` : '';
+    let note = '';
+    if (record.state === 'drifted') {
+      note =
+        record.reason === 'emitted_path_not_managed_directory'
+          ? '  (drifted — emitted path is not a managed directory; local content kept)'
+          : '  (drifted — local edits kept; run with --force to overwrite)';
+    } else if (record.state === 'blocked') {
+      note = '  (unowned content is here; remove it to let skillfoo manage this skill)';
+    } else if (record.overwritesLocalEdits === true) {
+      note = '  (overwrote local edits)';
+    } else if (record.state === 'lock_update') {
+      note = '  (updated lock metadata)';
+    }
+    output(`  ${presentation.mark} ${record.name}${files}${note}`);
+  }
+
+  writeLock(cwd, plan.nextLock);
+
+  const agentsProjection = plan.projections[0];
+  if (agentsProjection?.kind !== 'agents_md') {
+    throw new Error('internal error: AGENTS.md projection is missing');
+  }
+  if (agentsProjection.state === 'update' && agentsProjection.nextContents !== null) {
+    writeAgentsMd(cwd, agentsProjection.nextContents);
+  }
+
+  for (const projection of plan.projections.slice(1)) {
+    if (projection.kind !== 'claude_adapter') continue;
+    if (projection.state === 'update') {
+      createClaudeAdapter(projection.candidate);
+    } else if (projection.state === 'blocked') {
+      const reason =
+        projection.reason === undefined ? 'ownership cannot be proven' : REASON_TEXT[projection.reason];
+      output(`  ⊘ ${projection.skill} adapter  (blocked — ${reason})`);
     }
   }
 
-  writeLock(cwd, newLock);
-
-  const count = activeManaged.length;
-  console.log(
-    `\nsynced ${count} skill${count === 1 ? '' : 's'} from ${config.registry} → ${config.emit}`,
+  const count = plan.activeSkills.length;
+  output(
+    `\nsynced ${count} skill${count === 1 ? '' : 's'} from ${plan.config.registry} → ${plan.config.emit}`,
   );
   let summary = `${tally.added} added · ${tally.updated} updated · ${tally.unchanged} unchanged`;
   if (tally.drifted > 0) summary += ` · ${tally.drifted} drifted`;
   if (tally.blocked > 0) summary += ` · ${tally.blocked} blocked`;
   if (removed > 0) summary += ` · ${removed} removed`;
   if (removalBlocked > 0) summary += ` · ${removalBlocked} removal blocked`;
-  console.log(summary);
+  output(summary);
 
-  updateAgentsMd(cwd, config.emit, activeManaged, retainedManaged);
   if (count > 0) {
-    linkClaudeAdapter(cwd, config.emit, activeManaged);
-    console.log(`updated AGENTS.md · linked .claude/skills/ → ${config.emit}/ (Claude adapter)`);
+    const blockedAdapters = plan.projections.filter(
+      (projection) => projection.kind === 'claude_adapter' && projection.state === 'blocked',
+    ).length;
+    if (blockedAdapters === 0) {
+      output(`updated AGENTS.md · linked .claude/skills/ → ${plan.config.emit}/ (Claude adapter)`);
+    } else {
+      output(
+        `updated AGENTS.md · reconciled .claude/skills/ → ${plan.config.emit}/ ` +
+          `(${blockedAdapters} blocked adapter${blockedAdapters === 1 ? '' : 's'} preserved)`,
+      );
+    }
+  }
+}
+
+function skillPresentation(state: SkillState): {
+  tally: 'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked';
+  mark: string;
+} {
+  switch (state) {
+    case 'add':
+      return { tally: 'added', mark: '+' };
+    case 'update':
+    case 'lock_update':
+      return { tally: 'updated', mark: '~' };
+    case 'unchanged':
+      return { tally: 'unchanged', mark: '=' };
+    case 'drifted':
+      return { tally: 'drifted', mark: '!' };
+    case 'blocked':
+      return { tally: 'blocked', mark: '⊘' };
+    case 'remove':
+    case 'removal_blocked':
+      throw new Error(`internal error: removal state ${state} used as active presentation`);
   }
 }

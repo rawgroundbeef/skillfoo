@@ -8,6 +8,7 @@ const GIT_PREFIXES = [
   'https://',
   'git@',
   'ssh://',
+  'file://',
   'github.com/',
   'gitlab.com/',
   'bitbucket.org/',
@@ -18,18 +19,18 @@ export function isGitRegistry(spec: string): boolean {
 }
 
 function toCloneUrl(spec: string): string {
-  if (/^(https?:\/\/|git@|ssh:\/\/)/.test(spec)) return spec;
+  if (/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(spec)) return spec;
   return `https://${spec.replace(/\.git$/, '')}.git`;
 }
 
-function cacheDirFor(url: string): string {
+function cacheDirFor(url: string, cacheRoot: string): string {
   const slug = url
     .replace(/^\w+:\/\//, '')
     .replace(/^git@/, '')
     .replace(/[:]/g, '-')
     .replace(/\.git$/, '')
     .replace(/[^\w.-]+/g, '-');
-  return join(homedir(), '.skillfoo', 'registries', slug);
+  return join(cacheRoot, slug);
 }
 
 function git(args: string[], cwd: string): void {
@@ -51,24 +52,31 @@ function registryErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function resolveRegistry(spec: string, cwd: string): string {
+export interface RegistryOptions {
+  reporter?: (message: string) => void;
+  cacheRoot?: string;
+}
+
+export function resolveRegistry(spec: string, cwd: string, options: RegistryOptions = {}): string {
   if (!isGitRegistry(spec)) return resolve(cwd, spec);
 
   const url = toCloneUrl(spec);
-  const dir = cacheDirFor(url);
+  const cacheRoot = options.cacheRoot ?? join(homedir(), '.skillfoo', 'registries');
+  const dir = cacheDirFor(url, cacheRoot);
+  const report = options.reporter ?? ((message: string) => console.log(message));
 
   try {
     if (existsSync(join(dir, '.git'))) {
-      console.log(`  updating registry ${url}`);
+      report(`  updating registry ${url}`);
       git(['fetch', '--depth', '1', 'origin'], dir);
       git(['reset', '--hard', '@{upstream}'], dir);
     } else {
-      console.log(`  cloning registry ${url}`);
+      report(`  cloning registry ${url}`);
       freshClone(url, dir);
     }
   } catch {
     try {
-      console.log(`  re-cloning registry ${url}`);
+      report(`  re-cloning registry ${url}`);
       freshClone(url, dir);
     } catch (error) {
       throw new Error(`could not fetch registry ${url}: ${registryErrorMessage(error)}`);

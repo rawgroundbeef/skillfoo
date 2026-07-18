@@ -15,6 +15,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { linkClaudeAdapter } from '../src/emit.js';
 import {
+  executeManagedRemoval,
+  inspectManagedRemoval,
   removeManagedSkill,
   resolveManagedRemovalCandidates,
 } from '../src/removal.js';
@@ -49,6 +51,25 @@ test('removes an unchanged emitted directory and its expected adapter', () => {
   const state = fixture();
   try {
     assert.deepEqual(removeManagedSkill(candidate(state.root), state.hash), { status: 'removed' });
+    assert.equal(existsSync(state.emitted), false);
+    assert.equal(existsSync(state.adapter), false);
+  } finally {
+    rmSync(state.root, { recursive: true, force: true });
+  }
+});
+
+test('separates read-only removal inspection from safe execution', () => {
+  const state = fixture();
+  try {
+    const resolved = candidate(state.root);
+    const adapterTarget = readlinkSync(state.adapter);
+    const emittedBytes = readFileSync(join(state.emitted, 'SKILL.md'));
+
+    assert.deepEqual(inspectManagedRemoval(resolved, state.hash), { status: 'safe' });
+    assert.deepEqual(readFileSync(join(state.emitted, 'SKILL.md')), emittedBytes);
+    assert.equal(readlinkSync(state.adapter), adapterTarget);
+
+    executeManagedRemoval(resolved);
     assert.equal(existsSync(state.emitted), false);
     assert.equal(existsSync(state.adapter), false);
   } finally {
@@ -190,7 +211,17 @@ for (const variant of ['ignored entry', 'nested link', 'empty directory'] as con
 test('validates every lock-derived name as one cross-platform path segment', () => {
   const root = mkdtempSync(join(tmpdir(), 'skillfoo-removal-paths-'));
   try {
-    for (const unsafe of ['..', '../outside', 'nested/name', 'nested\\name', 'C:', 'CON']) {
+    for (const unsafe of [
+      '..',
+      '../outside',
+      'nested/name',
+      'nested\\name',
+      'C:',
+      'CON',
+      'NUL.txt',
+      'CON .txt',
+      'wild*card',
+    ]) {
       assert.throws(
         () => resolveManagedRemovalCandidates(root, '.agents/skills', ['safe', unsafe]),
         /lock is corrupt: unsafe managed skill name.*expected one path segment/,
