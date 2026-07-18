@@ -25,6 +25,9 @@ technical decisions, and handoff to agree before implementation begins.
    their source, and report whether the handoff really passes.
 8. **Implement fresh** — clear context and execute from the documents, not from
    memory of the planning conversation.
+9. **Review the implementation** — send the finished diff to a fresh `$review`
+   subagent, address blocking findings, rerun verification, and repeat until the
+   reviewer approves.
 
 ## What it leaves behind
 
@@ -47,6 +50,8 @@ technical decisions, and handoff to agree before implementation begins.
   in a fresh context.
 - If the cold-start documents are insufficient, fix the documents instead of
   leaning on remembered conversation.
+- Implementation is not ready for handoff until repository checks pass and a
+  fresh `$review` pass approves the final diff.
 
 Those gates are the point. The skill is trying to prevent a smooth planning
 conversation from masquerading as a durable shared understanding.
@@ -61,4 +66,5 @@ Or hand it a kickoff brief, issue, rough requirements, or an existing PRD and
 let it recover the missing discovery and decisions from the repository.
 
 The executable workflow lives in [SKILL.md](./SKILL.md). It composes naturally
-with [`grill`](../grill/), [`uat`](../uat/), and [`prd`](../prd/).
+with [`grill`](../grill/), [`uat`](../uat/), [`prd`](../prd/), and
+[`review`](../review/).

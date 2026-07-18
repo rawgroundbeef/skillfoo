@@ -63,10 +63,11 @@ export interface SkillPlanRecord {
   fileCount: number;
   sourceDir?: string;
   destinationDir?: string;
+  registryHash?: string;
+  currentHash?: string;
   nextEntry?: LockEntry;
   previousEntry?: LockEntry;
   removalCandidate?: ManagedRemovalCandidate;
-  overwritesLocalEdits?: boolean;
 }
 
 export interface AgentsMdProjection {
@@ -110,7 +111,6 @@ export interface ReconciliationPlan {
 }
 
 export interface PlanOptions {
-  force?: boolean;
   registryReporter?: (message: string) => void;
   registryCacheRoot?: string;
   registryCatalog?: RegistryCatalog;
@@ -188,7 +188,6 @@ function desiredRecord(
   emitRoot: string,
   configuredSource: string,
   previousEntry: LockEntry | undefined,
-  force: boolean,
 ): { record: SkillPlanRecord; description?: DescribedSkill } {
   const sourceDir = join(registryDir, name);
   const destinationDir = directChild(emitRoot, name);
@@ -206,6 +205,7 @@ function desiredRecord(
         fileCount,
         sourceDir,
         destinationDir,
+        registryHash,
       },
     };
   }
@@ -218,6 +218,7 @@ function desiredRecord(
         fileCount,
         sourceDir,
         destinationDir,
+        registryHash,
         nextEntry: canonicalEntry,
         ...(previousEntry === undefined ? {} : { previousEntry }),
       },
@@ -237,6 +238,7 @@ function desiredRecord(
         fileCount,
         sourceDir,
         destinationDir,
+        registryHash,
         nextEntry: previousEntry,
         previousEntry,
       },
@@ -261,6 +263,8 @@ function desiredRecord(
         fileCount,
         sourceDir,
         destinationDir,
+        registryHash,
+        currentHash: destinationHash,
         nextEntry: canonicalEntry,
         previousEntry,
       },
@@ -268,7 +272,7 @@ function desiredRecord(
     };
   }
 
-  if (destinationHash === previousEntry.hash || force) {
+  if (destinationHash === previousEntry.hash) {
     return {
       record: {
         name,
@@ -276,11 +280,10 @@ function desiredRecord(
         fileCount,
         sourceDir,
         destinationDir,
+        registryHash,
+        currentHash: destinationHash,
         nextEntry: canonicalEntry,
         previousEntry,
-        ...(force && destinationHash !== previousEntry.hash
-          ? { overwritesLocalEdits: true }
-          : {}),
       },
       description: { name, description: readSkillDescription(sourceDir) },
     };
@@ -294,6 +297,8 @@ function desiredRecord(
       fileCount,
       sourceDir,
       destinationDir,
+      registryHash,
+      currentHash: destinationHash,
       nextEntry: previousEntry,
       previousEntry,
     },
@@ -339,7 +344,6 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
       emitRoot,
       config.registry,
       Object.hasOwn(lock.skills, name) ? lock.skills[name] : undefined,
-      options.force ?? false,
     );
     skills.push(planned.record);
     if (planned.record.nextEntry !== undefined) {

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { updateAgentsMd } from '../src/emit.js';
+import { renderTargetAgentsMd, updateAgentsMd } from '../src/emit.js';
 
 test('preserves replacement patterns when updating the managed AGENTS.md block', () => {
   const root = mkdtempSync(join(tmpdir(), 'skillfoo-emit-'));
@@ -168,4 +168,60 @@ test('preserves retained rows byte-for-byte while refreshing and removing neighb
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+for (const lineEnding of ['\n', '\r\n']) {
+  test(`targeted rendering changes only the named managed row with ${lineEnding === '\n' ? 'LF' : 'CRLF'}`, () => {
+    const alphaBefore = `- [alpha](old/alpha/SKILL.md) — Local alpha.${lineEnding}`;
+    const beta = `  - [beta](custom/beta/SKILL.md) — Preserve $& beta.${lineEnding}`;
+    const current =
+      `# Agents${lineEnding}${lineEnding}` +
+      `Bespoke before.${lineEnding}` +
+      `<!-- skillfoo:start -->${lineEnding}` +
+      `Custom managed introduction.${lineEnding}${lineEnding}` +
+      alphaBefore +
+      beta +
+      `<!-- skillfoo:end -->${lineEnding}` +
+      `Bespoke after.${lineEnding}`;
+
+    const next = renderTargetAgentsMd(current, '.agents/skills', {
+      name: 'alpha',
+      description: 'Registry alpha.',
+    });
+
+    assert.equal(
+      next,
+      current.replace(
+        alphaBefore,
+        `- [alpha](.agents/skills/alpha/SKILL.md) — Registry alpha.${lineEnding}`,
+      ),
+    );
+    assert.ok(next.includes(beta));
+  });
+}
+
+test('targeted rendering inserts only a missing target row or target-only block', () => {
+  const managed =
+    '# Agents\n\n<!-- skillfoo:start -->\nExisting intro.\n' +
+    '- [beta](custom/beta/SKILL.md) — Preserve beta.\n<!-- skillfoo:end -->\n';
+  const inserted = renderTargetAgentsMd(managed, '.agents/skills', {
+    name: 'alpha',
+    description: 'Registry alpha.',
+  });
+  assert.equal(
+    inserted,
+    managed.replace(
+      '<!-- skillfoo:end -->',
+      '- [alpha](.agents/skills/alpha/SKILL.md) — Registry alpha.\n<!-- skillfoo:end -->',
+    ),
+  );
+
+  const bespoke = '# Agents\n\n## Workflow\n\nPreserve this.\n';
+  const targetOnly = renderTargetAgentsMd(bespoke, '.agents/skills', {
+    name: 'alpha',
+    description: 'Registry alpha.',
+  });
+  assert.match(targetOnly, /## Workflow\n\nPreserve this\./);
+  assert.match(targetOnly, /<!-- skillfoo:start -->[\s\S]*\[alpha\]/);
+  assert.doesNotMatch(targetOnly, /\[beta\]/);
 });

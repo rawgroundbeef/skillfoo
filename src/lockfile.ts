@@ -92,3 +92,27 @@ export function writeLock(cwd: string, lock: LockFile): void {
   const contents = `${JSON.stringify({ lockfileVersion: LOCKFILE_VERSION, skills }, null, 2)}\n`;
   writeFileSync(join(cwd, LOCK_NAME), contents);
 }
+
+function entriesEqual(left: LockEntry | undefined, right: LockEntry | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.source === right.source && left.hash === right.hash;
+}
+
+/**
+ * Compare and replace one lock entry from a fresh validated read while
+ * retaining every unrelated entry value.
+ */
+export function compareAndSetLockEntry(
+  cwd: string,
+  name: string,
+  expected: LockEntry,
+  next: LockEntry,
+): void {
+  const lock = readLock(cwd);
+  const current = Object.hasOwn(lock.skills, name) ? lock.skills[name] : undefined;
+  if (!entriesEqual(current, expected)) {
+    throw new Error(`stale lock evidence for ${name}; the managed baseline changed`);
+  }
+  setLockEntry(lock.skills, name, next);
+  writeLock(cwd, lock);
+}

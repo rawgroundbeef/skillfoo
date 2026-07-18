@@ -122,7 +122,6 @@ export async function initializeProject(
 
   try {
     const reconciliation = await sync(cwd, {
-      force: false,
       registryCatalog: catalog,
       ...(options.output === undefined ? {} : { output: options.output }),
     });

@@ -187,6 +187,56 @@ export function renderAgentsMd(
   return `# Agents\n\n${buildBlock(emitRel, skillNames)}\n`;
 }
 
+/**
+ * Render only one managed skill row. Existing unrelated managed rows and all
+ * content outside the managed span are retained byte-for-byte.
+ */
+export function renderTargetAgentsMd(
+  current: string | null,
+  emitRel: string,
+  skill: DescribedSkill,
+): string {
+  if (current === null) {
+    return `# Agents\n\n${buildBlock(emitRel, [skill])}\n`;
+  }
+
+  const span = managedSpan(current);
+  if (span === null) {
+    const block = buildBlock(emitRel, [skill], false);
+    return (
+      appendToSkillsSection(current, block) ??
+      `${current.trimEnd()}\n\n${buildBlock(emitRel, [skill])}\n`
+    );
+  }
+
+  const lineEnding = span.block.includes('\r\n') ? '\r\n' : '\n';
+  const segments = span.block.match(/[^\r\n]*(?:\r\n|\n|$)/g)?.filter(Boolean) ?? [];
+  let represented = false;
+  const nextSegments = segments.map((segment) => {
+    const ending = segment.endsWith('\r\n') ? '\r\n' : segment.endsWith('\n') ? '\n' : '';
+    const line = ending.length > 0 ? segment.slice(0, -ending.length) : segment;
+    const row = /^[\t ]*- \[([^\]\r\n]+)\]\(/.exec(line);
+    if (row?.[1] !== skill.name) return segment;
+    represented = true;
+    return `${canonicalRow(emitRel, skill)}${ending || lineEnding}`;
+  });
+
+  let block = nextSegments.join('');
+  if (!represented) {
+    const endIndex = block.lastIndexOf(END);
+    if (endIndex === -1) {
+      throw new Error('internal error: managed AGENTS.md span lost its end marker');
+    }
+    const beforeEnd = block.slice(0, endIndex);
+    const separator = beforeEnd.endsWith(lineEnding) ? '' : lineEnding;
+    block =
+      `${beforeEnd}${separator}${canonicalRow(emitRel, skill)}${lineEnding}` +
+      block.slice(endIndex);
+  }
+
+  return current.slice(0, span.start) + block + current.slice(span.end);
+}
+
 export function writeAgentsMd(cwd: string, contents: string): void {
   writeFileSync(join(cwd, 'AGENTS.md'), contents);
 }
