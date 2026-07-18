@@ -11,7 +11,8 @@ import { dirname, join, resolve } from 'node:path';
 import { loadConfig } from './config.js';
 import { linkClaudeAdapter, updateAgentsMd } from './emit.js';
 import type { LockFile } from './lockfile.js';
-import { readLock, writeLock } from './lockfile.js';
+import { readLock, setLockEntry, writeLock } from './lockfile.js';
+import { removeManagedSkill, resolveManagedRemovalCandidates } from './removal.js';
 import { resolveRegistry } from './registry.js';
 import { hashSkillDir, walkFiles } from './skilldir.js';
 
@@ -75,8 +76,11 @@ export async function sync(cwd: string, { force = false } = {}): Promise<void> {
 
   const emitRoot = resolve(cwd, config.emit);
   const lock = readLock(cwd);
+  const removalNames = Object.keys(lock.skills).filter((name) => !wanted.includes(name));
+  const removalCandidates = resolveManagedRemovalCandidates(cwd, config.emit, removalNames);
   const newLock: LockFile = { lockfileVersion: 1, skills: {} };
-  const managed: string[] = [];
+  const activeManaged: string[] = [];
+  const retainedManaged: string[] = [];
   const mark: Record<SyncStatus, string> = {
     added: '+',
     updated: '~',
@@ -135,8 +139,8 @@ export async function sync(cwd: string, { force = false } = {}): Promise<void> {
       if (nextHash === undefined) {
         throw new Error(`internal error: no baseline hash for ${name}`);
       }
-      newLock.skills[name] = { source: config.registry, hash: nextHash };
-      managed.push(name);
+      setLockEntry(newLock.skills, name, { source: config.registry, hash: nextHash });
+      activeManaged.push(name);
     }
 
     tally[status]++;
@@ -152,20 +156,41 @@ export async function sync(cwd: string, { force = false } = {}): Promise<void> {
     console.log(`  ${mark[status]} ${name}${files}${note}`);
   }
 
+  let removed = 0;
+  let removalBlocked = 0;
+  for (const candidate of removalCandidates) {
+    const previous = lock.skills[candidate.name];
+    if (previous === undefined) {
+      throw new Error(`internal error: no locked baseline for ${candidate.name}`);
+    }
+    const result = removeManagedSkill(candidate, previous.hash);
+    if (result.status === 'removed') {
+      removed++;
+      console.log(`  - ${candidate.name}`);
+    } else {
+      removalBlocked++;
+      setLockEntry(newLock.skills, candidate.name, previous);
+      retainedManaged.push(candidate.name);
+      console.log(`  ⊘ ${candidate.name}  (removal blocked — ${result.reason})`);
+    }
+  }
+
   writeLock(cwd, newLock);
 
-  const count = managed.length;
+  const count = activeManaged.length;
   console.log(
     `\nsynced ${count} skill${count === 1 ? '' : 's'} from ${config.registry} → ${config.emit}`,
   );
   let summary = `${tally.added} added · ${tally.updated} updated · ${tally.unchanged} unchanged`;
   if (tally.drifted > 0) summary += ` · ${tally.drifted} drifted`;
   if (tally.blocked > 0) summary += ` · ${tally.blocked} blocked`;
+  if (removed > 0) summary += ` · ${removed} removed`;
+  if (removalBlocked > 0) summary += ` · ${removalBlocked} removal blocked`;
   console.log(summary);
 
+  updateAgentsMd(cwd, config.emit, activeManaged, retainedManaged);
   if (count > 0) {
-    updateAgentsMd(cwd, config.emit, managed);
-    linkClaudeAdapter(cwd, config.emit, managed);
+    linkClaudeAdapter(cwd, config.emit, activeManaged);
     console.log(`updated AGENTS.md · linked .claude/skills/ → ${config.emit}/ (Claude adapter)`);
   }
 }

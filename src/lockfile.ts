@@ -14,6 +14,19 @@ export interface LockFile {
   skills: Record<string, LockEntry>;
 }
 
+export function setLockEntry(
+  skills: Record<string, LockEntry>,
+  name: string,
+  entry: LockEntry,
+): void {
+  Object.defineProperty(skills, name, {
+    value: entry,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -60,10 +73,10 @@ export function readLock(cwd: string): LockFile {
     if (typeof value.hash !== 'string' || !value.hash) {
       throw new Error(`${LOCK_NAME} is corrupt: skills["${name}"].hash is missing or empty`);
     }
-    skills[name] = {
+    setLockEntry(skills, name, {
       source: typeof value.source === 'string' ? value.source : '',
       hash: value.hash,
-    };
+    });
   }
 
   return { lockfileVersion: version, skills };
@@ -73,7 +86,7 @@ export function writeLock(cwd: string, lock: LockFile): void {
   const skills: Record<string, LockEntry> = {};
   for (const name of Object.keys(lock.skills).sort()) {
     const entry = lock.skills[name];
-    if (entry !== undefined) skills[name] = entry;
+    if (entry !== undefined) setLockEntry(skills, name, entry);
   }
 
   const contents = `${JSON.stringify({ lockfileVersion: LOCKFILE_VERSION, skills }, null, 2)}\n`;

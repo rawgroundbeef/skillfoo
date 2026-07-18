@@ -15,7 +15,7 @@
     },
     "slice": {
       "source": "github.com/rawgroundbeef/skills",
-      "hash": "sha256:d28ea9f3542773b5af819254fbf3dbcc0198b2452c7051528782639be580c575"
+      "hash": "sha256:e1ec883117fc3b85e47fbd3b309b792861d054f0fed66aea1d132773a8925607"
     },
     "typescript-cli": {
       "source": "github.com/rawgroundbeef/skills",

@@ -173,9 +173,10 @@ that is vague or contradictory.
 ### 6. Adversarial review before handoff
 
 After the bootstrap is written, run an adversarial pass over the full artifact
-set before sending the user into a fresh context. The reviewer's job is to
-break the plan, not to polish prose. Use a fresh-context subagent when
-available so the review is not contaminated by conversation memory.
+set before sending the user into a fresh context. Do not treat the bootstrap as
+the completed handoff. The reviewer's job is to break the plan, not to polish
+prose. Use a fresh-context subagent when available so the review is not
+contaminated by conversation memory.
 
 - Read the artifacts cold, in the bootstrap's stated read order.
 - Hunt for contradictions between discovery, decisions, UAT, PRD, and
@@ -191,11 +192,25 @@ Route each finding to the upstream artifact that is wrong and fix it there —
 do not patch over it in the bootstrap. The review passes when it stops
 producing blocking findings.
 
+**STOP HERE after the review.** Report the outcome to the human before any
+implementation begins:
+
+- If blocking findings remain, say planning is not ready, summarize the
+  blockers, fix the upstream artifacts, and rerun the adversarial review.
+- When the review passes, explicitly tell the human that it passed and provide
+  the bootstrap path for the fresh implementation context.
+
+Do not continue into implementation in the planning context, even when an
+earlier request broadly authorized the slice. Wait for the handoff into a fresh
+context; the adversarial pass and the human-facing pass report are both required
+planning gates.
+
 ### 7. Clear context and implement
 
-Start implementation from `.planning/{NNNN-feature-slug}/bootstrap.md` in a
-fresh context. If the docs are insufficient to implement cold, update the docs
-instead of relying on remembered conversation.
+Only after the adversarial review passes and the human has been told, start
+implementation from `.planning/{NNNN-feature-slug}/bootstrap.md` in a fresh
+context. If the docs are insufficient to implement cold, update the docs instead
+of relying on remembered conversation.
 
 ## Follow-ups
 
@@ -247,7 +262,8 @@ Use this section order:
 
 Planning is ready when discovery, decisions, UAT, PRD, follow-ups, and
 bootstrap agree on scope, terms, acceptance, non-goals, and branch order, and
-the adversarial review has stopped producing blocking findings.
+the adversarial review has stopped producing blocking findings. Planning is
+ready for handoff only after that passing result has been reported to the human.
 
 Implementation is ready for handoff only after the relevant code is complete
 and the repo's verification gates (from `AGENTS.md`) pass.

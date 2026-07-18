@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -93,6 +93,78 @@ test('appends a managed skills section when the existing file has none', () => {
 
     updateAgentsMd(root, '.agents/skills', ['shared']);
     assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), firstSync);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const lineEnding of ['\n', '\r\n']) {
+  test(`removes only the final managed marker span and its ${lineEnding === '\n' ? 'LF' : 'CRLF'}`, () => {
+    const root = mkdtempSync(join(tmpdir(), 'skillfoo-empty-agents-'));
+    const before = `# Agents${lineEnding}${lineEnding}## Skills${lineEnding}${lineEnding}`;
+    const block = [
+      '<!-- skillfoo:start -->',
+      'managed content',
+      '<!-- skillfoo:end -->',
+      '',
+    ].join(lineEnding);
+    const after = `${lineEnding}## Workflow${lineEnding}${lineEnding}Keep this.${lineEnding}`;
+    try {
+      writeFileSync(join(root, 'AGENTS.md'), before + block + after);
+      updateAgentsMd(root, '.agents/skills', []);
+      assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), before + after);
+
+      updateAgentsMd(root, '.agents/skills', []);
+      assert.equal(readFileSync(join(root, 'AGENTS.md'), 'utf8'), before + after);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('does not create AGENTS.md for an empty managed set', () => {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-no-agents-'));
+  try {
+    updateAgentsMd(root, '.agents/skills', []);
+    assert.equal(existsSync(join(root, 'AGENTS.md')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('preserves retained rows byte-for-byte while refreshing and removing neighboring rows', () => {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-retained-row-'));
+  const active = join(root, '.agents', 'skills', 'active');
+  const retained = join(root, '.agents', 'skills', 'retained');
+  const retainedRow = '- [retained](old/location/SKILL.md) — Keep $& this exact description.\r\n';
+  try {
+    mkdirSync(active, { recursive: true });
+    mkdirSync(retained, { recursive: true });
+    writeFileSync(
+      join(active, 'SKILL.md'),
+      '---\nname: active\ndescription: Refreshed active guidance. More detail.\n---\n',
+    );
+    writeFileSync(
+      join(retained, 'SKILL.md'),
+      '---\nname: retained\ndescription: Locally changed metadata.\n---\n',
+    );
+    writeFileSync(
+      join(root, 'AGENTS.md'),
+      '<!-- skillfoo:start -->\r\n' +
+        'Shared agent skills live here:\r\n\r\n' +
+        '- [active](old/location/SKILL.md) — Stale.\r\n' +
+        '- [removed](old/location/SKILL.md) — Remove me.\r\n' +
+        retainedRow +
+        '<!-- skillfoo:end -->\r\n',
+    );
+
+    updateAgentsMd(root, '.agents/skills', ['active'], ['retained']);
+
+    const next = readFileSync(join(root, 'AGENTS.md'), 'utf8');
+    assert.match(next, /- \[active\]\(\.agents\/skills\/active\/SKILL\.md\) — Refreshed active guidance\./);
+    assert.doesNotMatch(next, /\[removed\]/);
+    assert.ok(next.includes(retainedRow));
+    assert.ok(next.indexOf('[active]') < next.indexOf('[retained]'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
