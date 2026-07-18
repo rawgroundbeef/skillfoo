@@ -9,7 +9,7 @@ Use this as the planning-to-implementation pipeline for one coherent vertical
 slice. The artifacts are the source of truth; do not rely on conversation
 memory once an artifact exists.
 
-Companion skills this pipeline loads: `grill`, `uat`, `prd` (and a
+Companion skills this pipeline loads: `$grill`, `$uat`, `$prd` (and a
 repo-specific `threat-model` skill when the repo has one). Repo-specific
 conventions — the integration branch name, verification gates, code layout, and
 which zone skills to load — come from the repo's `AGENTS.md`.
@@ -58,7 +58,7 @@ extraction in `discovery.md` still happens; the pixels back it up.
 
 ### 2. Grill first
 
-Load `grill` and run it against the kickoff brief, ticket, rough
+Load `$grill` and run it against the kickoff brief, ticket, rough
 requirements, existing PRD, or current code behavior. Keep grilling until the
 problem, constraints, domain terms, and non-goals are clear enough that a human
 and agent are using the same language.
@@ -93,7 +93,7 @@ language. Create or update ADRs under `docs/adr/` only when the
 
 ### 3. Write UAT before PRD
 
-Load `uat` before writing the PRD. Use the grilled context to define the
+Load `$uat` before writing the PRD. Use the grilled context to define the
 outside-in acceptance surface: what a human sees, does, verifies, and should not
 mistake for a bug.
 
@@ -121,7 +121,7 @@ The UAT should answer:
 
 ### 4. Write the PRD from discovery and decisions
 
-Load `prd` after the UAT is agreed or at least stable enough to guide
+Load `$prd` after the UAT is agreed or at least stable enough to guide
 acceptance. The PRD is grounded in the grill output: discovery, decisions,
 shared domain language, and code evidence. Use the UAT as the human-approved
 user-perspective contract that keeps the PRD honest about observable behavior

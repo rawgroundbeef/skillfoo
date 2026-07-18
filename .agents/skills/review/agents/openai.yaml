@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review"
+  short_description: "Review diffs for merge-readiness risks"
+  default_prompt: "Use $review to review this branch for architecture, security, performance, maintainability, and testing risks."

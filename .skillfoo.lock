@@ -3,23 +3,31 @@
   "skills": {
     "grill": {
       "source": "github.com/rawgroundbeef/skills",
-      "hash": "sha256:b493af050cb84310c95cdb93e1629fe9b2605512f3b58c63cdd067690efe34b3"
+      "hash": "sha256:0bda9315433ca8b56a17f957e4eb36af8ec0076025ca687bfcc94ecd99c1e58b"
     },
     "pr": {
       "source": "github.com/rawgroundbeef/skills",
-      "hash": "sha256:fa8e62d7e7055a28537bb1272298fcb72657c77acf56171fb92d7aacf8da8a94"
+      "hash": "sha256:f44aed54e1a6a540ad04b945d1673f864c2420780551111c0225fc6cef7a909b"
     },
     "prd": {
       "source": "github.com/rawgroundbeef/skills",
-      "hash": "sha256:05a89a947e0dc00e16f93f4e6426f92901b0ff85075813d072b364ae070c3fc9"
+      "hash": "sha256:35fa376269d5118be5c24f7dc54718193030570e60c314ee1cddaec81df0e875"
+    },
+    "review": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:c6f265291e13f6c8a7e78bd71dbeb8139661cf91dd261dca6cd6f35170fe1774"
     },
     "slice": {
       "source": "github.com/rawgroundbeef/skills",
-      "hash": "sha256:e1ec883117fc3b85e47fbd3b309b792861d054f0fed66aea1d132773a8925607"
+      "hash": "sha256:5336497064bbdc7a38673b78c3893f161933894d14c62edbac6b0e5c76b888e9"
     },
     "typescript-cli": {
       "source": "github.com/rawgroundbeef/skills",
-      "hash": "sha256:922ee918ee1f09585ecc26ee52a51c68132599ad13a2159722741661be3a64b2"
+      "hash": "sha256:695589b69b4347b75a1822406039d6fdc5d63eb59aec16998b03771fa463a59e"
+    },
+    "uat": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:f0269df61b8e6b1da85da723cff857f14ef011adcf2ae7265d03404357ab0456"
     }
   }
 }

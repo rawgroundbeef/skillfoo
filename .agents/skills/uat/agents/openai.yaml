@@ -1,0 +1,4 @@
+interface:
+  display_name: "UAT"
+  short_description: "Write practical user acceptance test plans"
+  default_prompt: "Use $uat to create an executable manual acceptance plan for this feature."

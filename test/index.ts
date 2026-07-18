@@ -1,6 +1,7 @@
 import './cli.test.js';
 import './config.test.js';
 import './emit.test.js';
+import './init.test.js';
 import './lockfile.test.js';
 import './plan.test.js';
 import './registry.test.js';

@@ -2,7 +2,6 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
-  readdirSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
@@ -22,7 +21,10 @@ import {
   resolveManagedRemovalCandidates,
   type ManagedRemovalCandidate,
 } from './removal.js';
-import { resolveRegistry } from './registry.js';
+import {
+  resolveRegistryCatalog,
+  type RegistryCatalog,
+} from './registry.js';
 import {
   assertSafeSkillName,
   directChild,
@@ -111,6 +113,7 @@ export interface PlanOptions {
   force?: boolean;
   registryReporter?: (message: string) => void;
   registryCacheRoot?: string;
+  registryCatalog?: RegistryCatalog;
 }
 
 const SKILL_CHANGES = new Set<SkillState>(['add', 'update', 'lock_update', 'remove']);
@@ -121,14 +124,6 @@ function isMissing(error: unknown): boolean {
     'code' in error &&
     (error as NodeJS.ErrnoException).code === 'ENOENT'
   );
-}
-
-function listRegistrySkills(registryDir: string): string[] {
-  return readdirSync(registryDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((entry) => entry.name)
-    .filter((name) => existsSync(join(registryDir, name, 'SKILL.md')))
-    .sort();
 }
 
 type DestinationShape = 'missing' | 'directory' | 'other';
@@ -312,12 +307,13 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
     ...(options.registryReporter === undefined ? {} : { reporter: options.registryReporter }),
     ...(options.registryCacheRoot === undefined ? {} : { cacheRoot: options.registryCacheRoot }),
   };
-  const registryDir = resolveRegistry(config.registry, cwd, registryOptions);
-  if (!existsSync(registryDir)) {
-    throw new Error(`registry not found: ${registryDir} (registry: ${config.registry})`);
+  const catalog =
+    options.registryCatalog ?? resolveRegistryCatalog(config.registry, cwd, registryOptions);
+  if (catalog.spec !== config.registry) {
+    throw new Error('internal error: prepared registry does not match project configuration');
   }
-
-  const available = listRegistrySkills(registryDir);
+  const registryDir = catalog.directory;
+  const available = [...catalog.skills];
   const wanted = normalizeDesiredNames(config.skills ?? available);
   const missing = wanted.filter((name) => !available.includes(name));
   if (missing.length > 0) {
