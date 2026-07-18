@@ -11,8 +11,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { run, type CliIO } from '../src/cli.js';
+import { createLineReader, run, type CliIO } from '../src/cli.js';
 
 function capture(cwd = process.cwd()): {
   io: CliIO;
@@ -50,12 +51,28 @@ function interactiveCapture(cwd: string, answers: Array<string | null>): {
   const output = capture(cwd);
   const prompts: string[] = [];
   output.io.isInputTTY = () => true;
-  output.io.readLine = async (prompt) => {
-    prompts.push(prompt);
-    return answers.shift() ?? null;
-  };
+  output.io.openLineReader = () => ({
+    readLine: async (prompt) => {
+      prompts.push(prompt);
+      return answers.shift() ?? null;
+    },
+    close: () => undefined,
+  });
   return { ...output, prompts };
 }
+
+test('line reader preserves type-ahead input delivered in one stream chunk', async () => {
+  const input = new PassThrough();
+  const prompts: string[] = [];
+  const reader = createLineReader(input, (prompt) => prompts.push(prompt));
+  const first = reader.readLine('First: ');
+  input.write('missing\nalpha\n');
+
+  assert.equal(await first, 'missing');
+  assert.equal(await reader.readLine('Retry: '), 'alpha');
+  assert.deepEqual(prompts, ['First: ', 'Retry: ']);
+  reader.close();
+});
 
 test('prints version successfully', async () => {
   const output = capture();
@@ -149,7 +166,7 @@ test('initializes explicit selections without prompting', async () => {
     writeSkill(registry, 'alpha');
     writeSkill(registry, 'beta');
     const output = capture(consumer);
-    output.io.readLine = async () => assert.fail('explicit init must not prompt');
+    output.io.openLineReader = () => assert.fail('explicit init must not prompt');
 
     assert.equal(
       await run(

@@ -60,6 +60,7 @@ function validateSelection(
   available: readonly string[],
 ): InitSelection {
   if (selection.kind === 'all') {
+    // Dynamic all makes every catalog entry desired, so validate every name now.
     normalizeDesiredNames(available);
     return selection;
   }

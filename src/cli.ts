@@ -66,24 +66,39 @@ export interface CliIO {
   stdout(message: string): void;
   stderr(message: string): void;
   isInputTTY?(): boolean;
-  readLine?(prompt: string): Promise<string | null>;
+  openLineReader?(): CliLineReader;
 }
 
-function readProcessLine(prompt: string): Promise<string | null> {
-  process.stdout.write(prompt);
-  const input = createInterface({ input: process.stdin, terminal: false });
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: string | null): void => {
-      if (settled) return;
-      settled = true;
-      input.close();
-      resolve(value);
-    };
-    input.once('line', (line) => finish(line));
-    input.once('close', () => finish(null));
-    input.once('SIGINT', () => finish(null));
+export interface CliLineReader {
+  readLine(prompt: string): Promise<string | null>;
+  close(): void;
+}
+
+export function createLineReader(
+  input: NodeJS.ReadableStream,
+  writePrompt: (prompt: string) => void,
+): CliLineReader {
+  const lines = createInterface({ input, terminal: false });
+  const iterator = lines[Symbol.asyncIterator]();
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    lines.close();
+  };
+  lines.once('close', () => {
+    closed = true;
   });
+  lines.once('SIGINT', close);
+
+  return {
+    readLine: async (prompt) => {
+      writePrompt(prompt);
+      const result = await iterator.next();
+      return result.done ? null : result.value;
+    },
+    close,
+  };
 }
 
 const processIO: CliIO = {
@@ -91,7 +106,7 @@ const processIO: CliIO = {
   stdout: (message) => console.log(message),
   stderr: (message) => console.error(message),
   isInputTTY: () => process.stdin.isTTY === true,
-  readLine: readProcessLine,
+  openLineReader: () => createLineReader(process.stdin, (prompt) => process.stdout.write(prompt)),
 };
 
 function errorMessage(error: unknown): string {
@@ -102,34 +117,40 @@ async function promptForSelection(
   available: readonly string[],
   io: CliIO,
 ): Promise<InitSelection> {
-  if (io.readLine === undefined) {
+  if (io.openLineReader === undefined) {
     throw new Error('terminal input is unavailable; provide --skill <name> or --all');
   }
+  const input = io.openLineReader();
 
-  io.stdout(
-    ['Available skills:', ...(available.length === 0 ? ['  (none)'] : available.map((name) => `  ${name}`))].join(
-      '\n',
-    ),
-  );
+  try {
+    io.stdout(
+      [
+        'Available skills:',
+        ...(available.length === 0 ? ['  (none)'] : available.map((name) => `  ${name}`)),
+      ].join('\n'),
+    );
 
-  while (true) {
-    const answer = await io.readLine('Select comma-separated skill names, or all: ');
-    if (answer === null) {
-      throw new Error('initialization cancelled; no files were written');
+    while (true) {
+      const answer = await input.readLine('Select comma-separated skill names, or all: ');
+      if (answer === null) {
+        throw new Error('initialization cancelled; no files were written');
+      }
+      const value = answer.trim();
+      if (value === 'all') return { kind: 'all' };
+
+      const names = value.split(',').map((name) => name.trim());
+      const invalid = names.filter(
+        (name) => name.length === 0 || !isSafeSkillName(name) || !available.includes(name),
+      );
+      if (invalid.length === 0) return { kind: 'named', names };
+
+      io.stderr(
+        `Invalid selection: ${invalid.map((name) => JSON.stringify(name)).join(', ')}. ` +
+          `Choose exact names from: ${available.join(', ') || '(none)'}, or enter all.`,
+      );
     }
-    const value = answer.trim();
-    if (value === 'all') return { kind: 'all' };
-
-    const names = value.split(',').map((name) => name.trim());
-    const invalid = names.filter(
-      (name) => name.length === 0 || !isSafeSkillName(name) || !available.includes(name),
-    );
-    if (invalid.length === 0) return { kind: 'named', names };
-
-    io.stderr(
-      `Invalid selection: ${invalid.map((name) => JSON.stringify(name)).join(', ')}. ` +
-        `Choose exact names from: ${available.join(', ') || '(none)'}, or enter all.`,
-    );
+  } finally {
+    input.close();
   }
 }
 

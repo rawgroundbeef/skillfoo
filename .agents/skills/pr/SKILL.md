@@ -79,6 +79,11 @@ Re-read the final diff — not the conversation — and check:
 When review comments land on an open PR, run this loop without waiting for
 per-comment instructions.
 
+Treat requests such as "triage the PR feedback" as authorization to execute
+this entire loop, including in-scope fixes, thread replies and resolutions,
+committing, and pushing. Stop after classification only when the user explicitly
+asks for read-only triage or a feedback summary.
+
 **Acknowledge every comment on its own thread.** Acting on feedback without a
 thread reply leaves the reviewer unable to see what happened and why; silent
 action is never an option.
