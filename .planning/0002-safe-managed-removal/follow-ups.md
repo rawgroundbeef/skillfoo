@@ -26,6 +26,7 @@ Date: 2026-07-17
 
 - **2026-07-17 · Pure reconciliation plan.** Extract a plan that sync can execute and a future status command can inspect without duplicating state classification.
 - **2026-07-17 · Symmetric ownership checks.** Centralize projection ownership checks so installation and removal use the same safety vocabulary.
+- **2026-07-17 · Blocked-removal diagnostics.** Carry the offending structural entry through removal results so reports can identify what made otherwise matching content unsafe to delete.
 - **2026-07-17 · Stale private planning context.** Refresh the separate planning repository's top-level context and todo after this slice ships; both still describe earlier lock and consumer milestones as pending.
 
 ## Environment / Testing Notes

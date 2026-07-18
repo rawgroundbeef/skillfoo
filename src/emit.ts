@@ -54,9 +54,24 @@ function buildBlock(
   return lines.join('\n');
 }
 
+function skillDescription(cwd: string, emitRel: string, name: string): string {
+  return firstSentence(frontmatter(join(cwd, emitRel, name, 'SKILL.md')).description);
+}
+
 function canonicalRow(cwd: string, emitRel: string, name: string): string {
-  const description = firstSentence(frontmatter(join(cwd, emitRel, name, 'SKILL.md')).description);
+  const description = skillDescription(cwd, emitRel, name);
   return `- [${name}](${emitRel}/${name}/SKILL.md) — ${description}`;
+}
+
+function canonicalSkills(
+  cwd: string,
+  emitRel: string,
+  skillNames: readonly string[],
+): Array<{ name: string; description: string }> {
+  return skillNames.map((name) => ({
+    name,
+    description: skillDescription(cwd, emitRel, name),
+  }));
 }
 
 function managedSpan(current: string): { start: number; end: number; block: string } | null {
@@ -157,11 +172,6 @@ export function updateAgentsMd(
     return;
   }
 
-  const skills = skillNames.map((name) => ({
-    name,
-    description: firstSentence(frontmatter(join(cwd, emitRel, name, 'SKILL.md')).description),
-  }));
-
   let next: string;
   if (existsSync(path)) {
     const current = readFileSync(path, 'utf8');
@@ -170,10 +180,12 @@ export function updateAgentsMd(
       const block = reconcileManagedBlock(cwd, emitRel, span.block, activeNames, retainedNames);
       next = current.slice(0, span.start) + block + current.slice(span.end);
     } else {
+      const skills = canonicalSkills(cwd, emitRel, skillNames);
       const block = buildBlock(emitRel, skills, false);
       next = appendToSkillsSection(current, block) ?? `${current.trimEnd()}\n\n${buildBlock(emitRel, skills)}\n`;
     }
   } else {
+    const skills = canonicalSkills(cwd, emitRel, skillNames);
     next = `# Agents\n\n${buildBlock(emitRel, skills)}\n`;
   }
   writeFileSync(path, next);

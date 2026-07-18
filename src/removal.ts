@@ -47,7 +47,6 @@ function isSafePathSegment(name: string): boolean {
     name === '..' ||
     name.includes('/') ||
     name.includes('\\') ||
-    name.includes('\0') ||
     name.includes(':') ||
     /[\u0000-\u001f\u007f]/.test(name) ||
     /[. ]$/.test(name)
