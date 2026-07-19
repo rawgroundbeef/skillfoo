@@ -42,7 +42,7 @@ test('renders stable, sorted JSON with separate section summaries', (context) =>
     summary: unknown;
   };
 
-  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.schemaVersion, 2);
   assert.equal(result.outcome, 'changes_available');
   assert.equal(result.registry, '../registry');
   assert.equal(result.emit, '.agents/skills');
@@ -63,7 +63,7 @@ test('renders stable, sorted JSON with separate section summaries', (context) =>
     ],
   );
   assert.deepEqual(result.summary, {
-    skills: { unchanged: 0, changes: 2, conflicts: 0 },
+    skills: { unchanged: 0, overrides: 0, changes: 2, conflicts: 0 },
     projections: { unchanged: 0, changes: 3, conflicts: 0 },
   });
   assert.equal(statusExitCode(plan), 2);
@@ -95,4 +95,40 @@ test('retains safe findings when a conflict makes attention take precedence', as
   assert.match(human, /alpha: update/);
   assert.match(human, /beta: drifted — local changes are preserved/);
   assert.match(human, /Ordinary sync can apply safe changes, but it will preserve conflicts/);
+});
+
+test('publishes a healthy Override and registry state in JSON schema 2', async (context) => {
+  const state = fixture(context);
+  await sync(state.consumer, { output: () => undefined });
+  writeFileSync(
+    join(state.consumer, '.agents', 'skills', 'alpha', 'SKILL.md'),
+    '---\nname: alpha\ndescription: Local alpha guidance.\n---\n\n# local\n',
+  );
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [beta, alpha]\noverrides: { alpha: local }\n',
+  );
+  await sync(state.consumer, { output: () => undefined });
+  writeFileSync(
+    join(state.registry, 'alpha', 'SKILL.md'),
+    '---\nname: alpha\ndescription: Changed registry guidance.\n---\n\n# changed\n',
+  );
+
+  const plan = planReconciliation(state.consumer);
+  const json = JSON.parse(renderStatusJson(plan)) as {
+    schemaVersion: number;
+    outcome: string;
+    skills: Array<Record<string, string>>;
+    summary: { skills: Record<string, number> };
+  };
+  assert.equal(json.schemaVersion, 2);
+  assert.equal(json.outcome, 'converged');
+  assert.deepEqual(json.skills[0], {
+    name: 'alpha',
+    state: 'override',
+    registryState: 'changed',
+  });
+  assert.equal(json.summary.skills.overrides, 1);
+  assert.match(renderStatusHuman(plan), /repository version is authoritative; registry baseline changed/);
+  assert.equal(statusExitCode(plan), 0);
 });

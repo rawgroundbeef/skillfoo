@@ -19,8 +19,8 @@ Usage:
   skillfoo init <registry> [--skill <name> ... | --all] [--emit <path>]
                            Connect this repo and run its first safe sync
   skillfoo sync             Pull safe changes from the registry into this repo
-  skillfoo resolve <skill> --take-registry
-                           Discard one Managed skill's local edits
+  skillfoo resolve <skill> (--take-registry | --keep-local)
+                           Choose registry or repository authority for one skill
   skillfoo status [--json]  Inspect whether ordinary sync is needed
   skillfoo --help           Show this help
   skillfoo --version        Show version
@@ -35,17 +35,18 @@ Options:
   --help  Show this help
 
 Locally edited Managed skills are preserved. Resolve one explicitly with
-skillfoo resolve <skill> --take-registry.
+skillfoo resolve <skill> --keep-local or --take-registry.
 `;
 
 const RESOLVE_HELP = `skillfoo resolve — resolve one local-edit conflict
 
 Usage:
-  skillfoo resolve <skill> --take-registry
+  skillfoo resolve <skill> (--take-registry | --keep-local)
 
 Options:
   --take-registry  Replace the named Managed skill with the registry tree,
                    permanently discarding its local edits
+  --keep-local     Keep the repository version as a live local Override
   --help           Show this help
 
 Outcomes and exit statuses:
@@ -146,10 +147,16 @@ function errorMessage(error: unknown): string {
 }
 
 function renderResolution(result: ResolutionResult): string {
-  const first =
-    result.action === 'replaced'
-      ? `Resolved ${result.skill}: the registry version won and local edits were discarded.`
-      : `No change for ${result.skill}: this Managed skill already matches the current registry.`;
+  let first: string;
+  if (result.action === 'replaced') {
+    first = `Resolved ${result.skill}: the registry version won and local edits were discarded.`;
+  } else if (result.action === 'already_current') {
+    first = `No change for ${result.skill}: this Managed skill already matches the current registry.`;
+  } else if (result.action === 'kept_local') {
+    first = `Resolved ${result.skill}: the repository version remains authoritative as a local Override.`;
+  } else {
+    first = `No content change for ${result.skill}: its local Override remains authoritative.`;
+  }
   if (result.exitCode === 0) return `${first}\nRepository is converged.`;
   if (result.exitCode === 2) {
     return `${first}\nUnrelated safe changes remain; run skillfoo sync to apply them.`;
@@ -241,6 +248,7 @@ export async function run(argv: readonly string[], io: CliIO = processIO): Promi
         strict: true,
         options: {
           'take-registry': { type: 'boolean', multiple: true },
+          'keep-local': { type: 'boolean', multiple: true },
           help: { type: 'boolean', short: 'h' },
         },
       });
@@ -251,16 +259,20 @@ export async function run(argv: readonly string[], io: CliIO = processIO): Promi
       if (parsed.positionals.length !== 1) {
         throw new Error('resolve requires exactly one <skill> positional argument');
       }
-      const directions = parsed.values['take-registry'];
-      if (directions === undefined || directions.length !== 1) {
-        throw new Error('resolve requires --take-registry exactly once');
+      const takeRegistry = parsed.values['take-registry']?.length ?? 0;
+      const keepLocal = parsed.values['keep-local']?.length ?? 0;
+      if (takeRegistry + keepLocal !== 1 || takeRegistry > 1 || keepLocal > 1) {
+        throw new Error('resolve requires exactly one of --take-registry or --keep-local, each at most once');
       }
       const skill = parsed.positionals[0];
       if (skill === undefined || !isSafeSkillName(skill)) {
         throw new Error(`unsafe skill name ${JSON.stringify(skill ?? '')}; expected one path segment`);
       }
 
-      const result = resolveSkill(io.cwd(), skill, { registryReporter: io.stderr });
+      const result = resolveSkill(io.cwd(), skill, {
+        direction: keepLocal === 1 ? 'keep_local' : 'take_registry',
+        registryReporter: io.stderr,
+      });
       io.stdout(renderResolution(result));
       return result.exitCode;
     } catch (error) {

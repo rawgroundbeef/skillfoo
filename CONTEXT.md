@@ -32,18 +32,27 @@ _Avoid_: Drift
 A managed-skill or projection difference that reconciliation will preserve until a user makes an explicit choice.
 _Avoid_: Error, pending change
 
+**Override**:
+An intentional policy that keeps a Managed skill's repository version authoritative until explicitly reversed.
+_Avoid_: Accepted conflict, ignored drift
+
 ## Relationships
 
 - A **Desired skill** can become a **Managed skill** after reconciliation establishes ownership.
 - A **Managed skill** can produce one or more **Projections**.
 - A **Bespoke skill** is outside reconciliation unless its path conflicts with a **Desired skill**.
+- An **Override** remains a **Managed skill** and can coexist with a **Converged** repository.
 - A repository is **Converged** only when its managed skills and **Projections** have neither a **Pending change** nor a **Conflict**.
 
 ## Example dialogue
 
 > **Dev:** "The registry has a newer version, but this **Managed skill** also has local edits. Is that a **Pending change**?"
 > **Domain expert:** "No. It is a **Conflict** because ordinary reconciliation must preserve the local edits until the user chooses how to resolve them."
+>
+> **Dev:** "What if I choose to keep editing the repository version?"
+> **Domain expert:** "That creates an **Override**. It stays **Managed**, but later repository edits remain intentional until the policy is explicitly reversed."
 
 ## Flagged ambiguities
 
 - "Drift" previously referred both to any difference and specifically to local edits of a managed skill; resolved: **Pending change** is safely applicable, while **Conflict** requires a user choice and `drifted` remains one specific conflict state.
+- "Local" in "local override" describes which version is authoritative, not ownership; an **Override** remains **Managed**, not **Bespoke**.

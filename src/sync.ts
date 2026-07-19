@@ -64,6 +64,7 @@ export interface SyncResult {
 
 const REASON_TEXT: Record<ConflictReason, string> = {
   local_changes: 'local changes',
+  override_content_missing: 'overridden repository content is missing',
   unmanaged_destination: 'unmanaged destination',
   unrepresented_local_structure: 'unrepresented local structure',
   emitted_path_not_managed_directory: 'emitted path is not a managed directory',
@@ -82,10 +83,11 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<Sync
       : { registryCatalog: options.registryCatalog }),
   });
 
-  const tally: Record<'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked', number> = {
+  const tally: Record<'added' | 'updated' | 'unchanged' | 'overrides' | 'drifted' | 'blocked', number> = {
     added: 0,
     updated: 0,
     unchanged: 0,
+    overrides: 0,
     drifted: 0,
     blocked: 0,
   };
@@ -122,10 +124,17 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<Sync
     const files = record.fileCount > 1 ? ` (${record.fileCount} files)` : '';
     let note = '';
     if (record.state === 'drifted') {
-      note =
-        record.reason === 'emitted_path_not_managed_directory'
-          ? '  (drifted — emitted path is not a managed directory; local content kept)'
-          : `  (drifted — local edits kept; run skillfoo resolve ${record.name} --take-registry to discard them)`;
+      if (record.reason === 'emitted_path_not_managed_directory') {
+        note = '  (drifted — emitted path is not a managed directory; local content kept)';
+      } else if (record.reason === 'override_content_missing') {
+        note =
+          `  (drifted — overridden repository content is missing; ` +
+          `restore it locally or run skillfoo resolve ${record.name} --take-registry)`;
+      } else {
+        note =
+          `  (drifted — local edits kept; run skillfoo resolve ${record.name} ` +
+          `--keep-local or --take-registry)`;
+      }
     } else if (record.state === 'blocked') {
       note = '  (unowned content is here; remove it to let skillfoo manage this skill)';
     } else if (record.state === 'lock_update') {
@@ -155,18 +164,21 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<Sync
     }
   }
 
-  const count = plan.activeSkills.length;
+  const count = plan.skills.filter(
+    (record) => record.state !== 'remove' && record.state !== 'removal_blocked',
+  ).length;
   output(
-    `\nsynced ${count} skill${count === 1 ? '' : 's'} from ${plan.config.registry} → ${plan.config.emit}`,
+    `\nreconciled ${count} configured skill${count === 1 ? '' : 's'} with ${plan.config.registry} → ${plan.config.emit}`,
   );
   let summary = `${tally.added} added · ${tally.updated} updated · ${tally.unchanged} unchanged`;
+  if (tally.overrides > 0) summary += ` · ${tally.overrides} override${tally.overrides === 1 ? '' : 's'}`;
   if (tally.drifted > 0) summary += ` · ${tally.drifted} drifted`;
   if (tally.blocked > 0) summary += ` · ${tally.blocked} blocked`;
   if (removed > 0) summary += ` · ${removed} removed`;
   if (removalBlocked > 0) summary += ` · ${removalBlocked} removal blocked`;
   output(summary);
 
-  if (count > 0) {
+  if (plan.activeSkills.length > 0) {
     const blockedAdapters = plan.projections.filter(
       (projection) => projection.kind === 'claude_adapter' && projection.state === 'blocked',
     ).length;
@@ -187,7 +199,7 @@ export async function sync(cwd: string, options: SyncOptions = {}): Promise<Sync
 }
 
 function skillPresentation(state: SkillState): {
-  tally: 'added' | 'updated' | 'unchanged' | 'drifted' | 'blocked';
+  tally: 'added' | 'updated' | 'unchanged' | 'overrides' | 'drifted' | 'blocked';
   mark: string;
 } {
   switch (state) {
@@ -198,6 +210,8 @@ function skillPresentation(state: SkillState): {
       return { tally: 'updated', mark: '~' };
     case 'unchanged':
       return { tally: 'unchanged', mark: '=' };
+    case 'override':
+      return { tally: 'overrides', mark: '◇' };
     case 'drifted':
       return { tally: 'drifted', mark: '!' };
     case 'blocked':

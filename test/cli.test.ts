@@ -119,7 +119,7 @@ test('shows sync and resolve help without project access and never advertises br
   try {
     const root = capture(cwd);
     assert.equal(await run(['--help'], root.io), 0);
-    assert.match(root.stdout[0] ?? '', /resolve <skill> --take-registry/);
+    assert.match(root.stdout[0] ?? '', /resolve <skill> \(--take-registry \| --keep-local\)/);
     assert.doesNotMatch(root.stdout[0] ?? '', /--force|sync -f/);
 
     const syncHelp = capture(cwd);
@@ -130,6 +130,7 @@ test('shows sync and resolve help without project access and never advertises br
     const resolveHelp = capture(cwd);
     assert.equal(await run(['resolve', '--help'], resolveHelp.io), 0);
     assert.match(resolveHelp.stdout[0] ?? '', /permanently discarding its local edits/);
+    assert.match(resolveHelp.stdout[0] ?? '', /live local Override/);
     assert.match(resolveHelp.stdout[0] ?? '', /2  target resolved.*safe changes remain/);
     assert.deepEqual(readdirSync(cwd), []);
   } finally {
@@ -146,7 +147,11 @@ test('strict sync and resolve syntax fails before project or registry access', a
       ['sync', '--unknown'],
       ['sync', 'alpha'],
       ['resolve', 'alpha'],
+      ['resolve', 'alpha', '--keep-local', '--take-registry'],
+      ['resolve', 'alpha', '--keep-local', '--keep-local'],
+      ['resolve', 'alpha', '--', '--keep-local'],
       ['resolve', '--take-registry'],
+      ['resolve', '--keep-local'],
       ['resolve', 'alpha', 'beta', '--take-registry'],
       ['resolve', 'alpha', '--take-registry', '--take-registry'],
       ['resolve', 'alpha', '--take-registry', '--unknown'],
@@ -456,7 +461,7 @@ test('the compiled status command keeps JSON clean and maps reconciliation outco
     assert.equal(fresh.status, 2);
     assert.equal(fresh.stderr, '');
     const freshJson = JSON.parse(fresh.stdout) as { schemaVersion: number; outcome: string };
-    assert.equal(freshJson.schemaVersion, 1);
+    assert.equal(freshJson.schemaVersion, 2);
     assert.equal(freshJson.outcome, 'changes_available');
     assert.equal(readFileSync(resolve(consumer, '.skillfoo.yml'), 'utf8').includes('alpha'), true);
     assert.equal(
@@ -523,6 +528,33 @@ test('the compiled resolver keeps streams clean and returns residual exits 0, 2,
   };
 
   try {
+    const override = setup('override');
+    edit(override.consumer, 'alpha');
+    const kept = spawnSync(
+      process.execPath,
+      [entrypoint, 'resolve', 'alpha', '--keep-local'],
+      { cwd: override.consumer, encoding: 'utf8' },
+    );
+    assert.equal(kept.status, 0);
+    assert.equal(kept.stderr, '');
+    assert.match(kept.stdout, /repository version remains authoritative.*converged/s);
+    const overrideStatus = spawnSync(
+      process.execPath,
+      [entrypoint, 'status', '--json'],
+      { cwd: override.consumer, encoding: 'utf8' },
+    );
+    assert.equal(overrideStatus.status, 0);
+    const overrideJson = JSON.parse(overrideStatus.stdout) as {
+      schemaVersion: number;
+      skills: Array<Record<string, string>>;
+    };
+    assert.equal(overrideJson.schemaVersion, 2);
+    assert.deepEqual(overrideJson.skills[0], {
+      name: 'alpha',
+      state: 'override',
+      registryState: 'unchanged',
+    });
+
     const converged = setup('converged');
     edit(converged.consumer, 'alpha');
     const resolved = spawnSync(
