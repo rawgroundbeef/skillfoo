@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { renderTargetAgentsMd, updateAgentsMd } from '../src/emit.js';
+import { renderAgentsMd, renderTargetAgentsMd, updateAgentsMd } from '../src/emit.js';
 
 test('preserves replacement patterns when updating the managed AGENTS.md block', () => {
   const root = mkdtempSync(join(tmpdir(), 'skillfoo-emit-'));
@@ -224,4 +224,40 @@ test('targeted rendering inserts only a missing target row or target-only block'
   assert.match(targetOnly, /## Workflow\n\nPreserve this\./);
   assert.match(targetOnly, /<!-- skillfoo:start -->[\s\S]*\[alpha\]/);
   assert.doesNotMatch(targetOnly, /\[beta\]/);
+});
+
+test('renders neutral guidance and labels only local Override rows', () => {
+  const rendered = renderAgentsMd(
+    null,
+    '.agents/skills',
+    [
+      { name: 'alpha', description: 'Local alpha.', localOverride: true },
+      { name: 'beta', description: 'Registry beta.' },
+    ],
+  );
+  assert.ok(rendered);
+  assert.match(rendered, /managed by skillfoo/);
+  assert.doesNotMatch(rendered, /edit them in the source registry/);
+  assert.match(rendered, /\[alpha\].*Local alpha\. \(local override; edit in this repository\)/);
+  assert.match(rendered, /\[beta\].*Registry beta\.$/m);
+  assert.doesNotMatch(rendered.match(/^.*\[beta\].*$/m)?.[0] ?? '', /local override/);
+});
+
+test('targeted Override rendering neutralizes the generated introduction and preserves unrelated rows', () => {
+  const beta = '  - [beta](custom/beta/SKILL.md) — Preserve $& beta.\n';
+  const current =
+    '# Agents\n\n<!-- skillfoo:start -->\n## Skills\n\n' +
+    'Shared agent skills live in `.agents/skills/` (synced by skillfoo — edit them in the source registry, not here):\n\n' +
+    '- [alpha](.agents/skills/alpha/SKILL.md) — Registry alpha.\n' +
+    beta +
+    '<!-- skillfoo:end -->\n';
+  const next = renderTargetAgentsMd(current, '.agents/skills', {
+    name: 'alpha',
+    description: 'Local alpha.',
+    localOverride: true,
+  });
+  assert.match(next, /managed by skillfoo/);
+  assert.doesNotMatch(next, /edit them in the source registry/);
+  assert.ok(next.includes(beta));
+  assert.match(next, /Local alpha\. \(local override; edit in this repository\)/);
 });

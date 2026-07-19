@@ -14,36 +14,10 @@ export interface LockFile {
   skills: Record<string, LockEntry>;
 }
 
-export function setLockEntry(
-  skills: Record<string, LockEntry>,
-  name: string,
-  entry: LockEntry,
-): void {
-  Object.defineProperty(skills, name, {
-    value: entry,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function readLock(cwd: string): LockFile {
-  const path = join(cwd, LOCK_NAME);
-  if (!existsSync(path)) {
-    return { lockfileVersion: LOCKFILE_VERSION, skills: {} };
-  }
-
+function parseLock(contents: string): LockFile {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
+    parsed = JSON.parse(contents);
   } catch (error) {
     throw new Error(`${LOCK_NAME} is corrupt: ${errorMessage(error)}`);
   }
@@ -82,15 +56,52 @@ export function readLock(cwd: string): LockFile {
   return { lockfileVersion: version, skills };
 }
 
-export function writeLock(cwd: string, lock: LockFile): void {
+export function parseLockContents(contents: string): LockFile {
+  return parseLock(contents);
+}
+
+export function setLockEntry(
+  skills: Record<string, LockEntry>,
+  name: string,
+  entry: LockEntry,
+): void {
+  Object.defineProperty(skills, name, {
+    value: entry,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function readLock(cwd: string): LockFile {
+  const path = join(cwd, LOCK_NAME);
+  if (!existsSync(path)) {
+    return { lockfileVersion: LOCKFILE_VERSION, skills: {} };
+  }
+
+  return parseLock(readFileSync(path, 'utf8'));
+}
+
+export function renderLock(lock: LockFile): string {
   const skills: Record<string, LockEntry> = {};
   for (const name of Object.keys(lock.skills).sort()) {
     const entry = lock.skills[name];
     if (entry !== undefined) setLockEntry(skills, name, entry);
   }
 
-  const contents = `${JSON.stringify({ lockfileVersion: LOCKFILE_VERSION, skills }, null, 2)}\n`;
-  writeFileSync(join(cwd, LOCK_NAME), contents);
+  return `${JSON.stringify({ lockfileVersion: LOCKFILE_VERSION, skills }, null, 2)}\n`;
+}
+
+export function writeLock(cwd: string, lock: LockFile): void {
+  writeFileSync(join(cwd, LOCK_NAME), renderLock(lock));
 }
 
 function entriesEqual(left: LockEntry | undefined, right: LockEntry | undefined): boolean {

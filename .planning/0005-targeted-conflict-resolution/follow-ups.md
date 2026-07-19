@@ -8,9 +8,6 @@ Date: 2026-07-18
 
 ## Deferred Slice Ideas
 
-- **2026-07-18 · Intentional local outcome.** Design how a user keeps local
-  edits without seeing the same Conflict forever: persisted override, selection
-  change, or Managed-to-Bespoke conversion.
 - **2026-07-18 · Registry promotion.** Promote local skill edits back to the
   source registry through an explicit git-native workflow rather than making a
   consumer-side resolver mutate a remote source implicitly.

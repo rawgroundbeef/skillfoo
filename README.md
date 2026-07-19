@@ -2,9 +2,9 @@
 
 Keep your team's agent skills in one place, synced to every repo.
 
-skillfoo pulls skills from a single source-of-truth git repo — your **skills registry** —
-into any project, as committed files an agent can read. Define a skill once; every repo
-stays in sync instead of drifting apart.
+skillfoo pulls skills from a **skills registry** into any project as committed files an
+agent can read. The registry is the default authority for Managed skills; a project can
+explicitly keep a repository version authoritative as a local Override.
 
 > Early and evolving. Today it provides local project initialization, safe reconciliation,
 > read-only status, and targeted resolution of locally edited Managed skills. GitHub-App PR
@@ -52,10 +52,16 @@ Projects may also author `.skillfoo.yml` directly:
 registry: github.com/your-org/skills   # a local path or a git URL
 # emit: .agents/skills                 # optional — this is the default
 # skills: [slice, pr]                  # optional — omit to sync everything
+# overrides:                           # optional live local-authority policy
+#   slice: local
 ```
 
 `emit` must be a non-empty relative path contained by the project. Existing path ancestors
 must be real directories, not symlinks, junctions, files, or special entries.
+
+`overrides` must map a selected, already Managed skill name to the exact value `local`. An
+Override remains Managed, keeps its prior source baseline in `.skillfoo.lock`, and accepts
+later safe repository edits until the policy is explicitly reversed.
 
 ## Reconciliation
 
@@ -65,14 +71,17 @@ After initialization, reconcile the configured desired policy at any time:
 skillfoo sync
 ```
 
-That clones/reads the registry, writes each skill into `.agents/skills/<name>/`, updates a
-managed `## Skills` block in `AGENTS.md`, and symlinks `.claude/skills/` so Claude Code
-discovers them. Re-running is idempotent.
+That clones/reads the registry, reconciles registry-authoritative skills into
+`.agents/skills/<name>/`, preserves healthy Overrides, updates a managed `## Skills` block in
+`AGENTS.md`, and symlinks `.claude/skills/` so Claude Code discovers them. Re-running is
+idempotent.
 
 Commit `.agents/skills/`, `AGENTS.md`, `.claude/skills/`, and `.skillfoo.lock` in consumer
 repos. Agents use those committed copies without contacting the registry; run `skillfoo sync`
 again only when intentionally upgrading. The lockfile lets sync update clean skills while
-preserving locally edited and bespoke skills. Deselecting a previously managed skill removes
+preserving locally edited, overridden, and bespoke skills. A healthy Override is excluded
+from registry content replacement while its managed index row and adapter remain reconciled.
+Registry updates or removal do not replace or delete Override content. Deselecting a previously managed skill removes
 its unchanged projections; local edits or foreign adapter content block removal and stay
 managed so skillfoo does not discard the ownership evidence needed to resolve them safely.
 
@@ -85,34 +94,44 @@ skillfoo status --json
 
 Status exits `0` when converged, `2` when ordinary sync can safely apply all pending work,
 `3` when at least one conflict needs attention, and `1` for usage or operational failures.
-Successful JSON output uses schema version 1 and writes only the JSON document to stdout;
+Successful JSON output uses schema version 2 and writes only the JSON document to stdout;
 registry progress and diagnostics use stderr.
 
 ### Resolve one local-edit conflict
 
-When status reports a Managed skill as `drifted` because of `local_changes`, explicitly take
-the current registry version for that skill only:
+When status reports a Managed skill as `drifted` because of `local_changes`, choose one
+authority for that skill only:
 
 ```sh
+skillfoo resolve slice --keep-local
 skillfoo resolve slice --take-registry
 ```
 
-This is destructive: it permanently discards local edits and local-only files inside the
-named skill. The explicit skill name and `--take-registry` direction are both required; the
-command is non-interactive and accepts no broad-force or confirmation aliases.
+`--keep-local` preserves the repository tree, records `overrides: { slice: local }`, retains
+the lock baseline, and labels the managed row with local editing guidance. The Override is a
+visible, non-conflicting state: later safe local edits stay intentional, and a repository with
+only healthy Overrides can be converged. If overridden content becomes missing or unsafe,
+skillfoo reports a Conflict and does not restore, traverse, or replace it implicitly.
 
-Resolution replaces only the named Desired, Managed skill, advances only its lock entry,
-updates only its managed `AGENTS.md` row, and creates its Claude adapter only when missing.
+`--take-registry` is destructive: it permanently discards local edits and local-only files
+inside the named skill. It also reverses an Override by clearing policy while installing the
+current registry content and advancing the target baseline. The explicit skill name and
+exactly one direction are required; the command is non-interactive and accepts no broad-force
+or confirmation aliases.
+
+Resolution changes only the named Desired, Managed skill and its dependent policy, baseline,
+managed `AGENTS.md` row, and missing safe Claude adapter. Keep-local never changes skill bytes
+or the lock entry. Take-registry replaces content and advances the target baseline as needed.
 Unrelated safe updates and conflicts remain untouched. A foreign or unsafe target adapter is
 preserved as a separate conflict rather than being claimed by the content-resolution choice.
 
-The replacement is staged and verified first. During mutation, skillfoo keeps a temporary
-recovery copy and restores the prior target-dependent state after a handled failure. A failed
-rollback reports the exact retained recovery path; a successful resolution leaves no backup
-or transaction artifact.
+The action is staged and verified first. During mutation, skillfoo keeps a temporary recovery
+manifest and exact before-snapshots, uses atomic root-metadata replacement, and restores prior
+target-dependent state after a handled failure. A failed rollback reports the exact retained
+recovery path; a successful resolution leaves no backup or transaction artifact.
 
-Running the same resolver again is a successful no-op only when the still-Managed skill
-content and canonical lock baseline already match the current registry. Safe updates,
+Running the same direction again is retry-safe when the Managed skill is already current or
+the healthy Override and its target projections are already satisfied. Safe updates,
 lock-only updates, removal candidates, Bespoke collisions, unsafe paths, and other conflict
 reasons are refused without consumer writes; inspect those cases with `skillfoo status` and
 apply safe work with `skillfoo sync`.
@@ -130,8 +149,9 @@ They fail as invalid usage and are never reinterpreted as ordinary sync.
 
 ## How it works
 
-- **Registry** — one git repo of skills, each at `<name>/SKILL.md` (the source of truth).
-- **Sync** — mirror each skill's whole directory into the consumer's neutral `.agents/skills/`.
+- **Registry** — one git repo of skills, each at `<name>/SKILL.md` (the default Managed authority).
+- **Override** — explicit project policy that makes one safe repository skill authoritative.
+- **Sync** — reconcile Managed skills into `.agents/skills/` while preserving Overrides.
 - **Adapters** — a managed block in `AGENTS.md` (the index) plus `.claude/skills/` symlinks
   (the Claude Code adapter). More agent targets can be added the same way.
 

@@ -7,6 +7,7 @@ import {
 
 const REASON_TEXT: Record<ConflictReason, string> = {
   local_changes: 'local changes are preserved',
+  override_content_missing: 'the overridden repository content is missing',
   unmanaged_destination: 'the destination is not owned by skillfoo',
   unrepresented_local_structure: 'local structure is not represented by the managed manifest',
   emitted_path_not_managed_directory: 'the emitted path is not a managed directory',
@@ -22,6 +23,7 @@ function publicSkill(record: SkillPlanRecord): Record<string, string> {
     name: record.name,
     state: record.state,
     ...(record.reason === undefined ? {} : { reason: record.reason }),
+    ...(record.registryState === undefined ? {} : { registryState: record.registryState }),
   };
 }
 
@@ -46,7 +48,7 @@ function orderedProjections(plan: ReconciliationPlan): ProjectionPlanRecord[] {
 export function renderStatusJson(plan: ReconciliationPlan): string {
   return JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       outcome: plan.outcome,
       registry: plan.config.registry,
       emit: plan.config.emit,
@@ -62,6 +64,12 @@ export function renderStatusJson(plan: ReconciliationPlan): string {
 }
 
 function skillLine(record: SkillPlanRecord): string {
+  if (record.state === 'override') {
+    return (
+      `  ${mark(record.state)} ${record.name}: override — repository version is authoritative; ` +
+      `registry baseline ${record.registryState ?? 'unknown'}`
+    );
+  }
   const reason = record.reason === undefined ? '' : ` — ${REASON_TEXT[record.reason]}`;
   return `  ${mark(record.state)} ${record.name}: ${record.state}${reason}`;
 }
@@ -77,6 +85,7 @@ function projectionLine(record: ProjectionPlanRecord): string {
 
 function mark(state: SkillPlanRecord['state'] | ProjectionPlanRecord['state']): string {
   if (state === 'unchanged') return '=';
+  if (state === 'override') return '◇';
   if (state === 'drifted' || state === 'blocked' || state === 'removal_blocked') return '!';
   if (state === 'remove') return '-';
   return '~';
@@ -87,6 +96,7 @@ export function renderStatusHuman(plan: ReconciliationPlan): string {
     .sort((left, right) => compareNames(left.name, right.name))
     .map(skillLine);
   const projectionLines = orderedProjections(plan).map(projectionLine);
+  const skillSummary = plan.summary.skills;
 
   let conclusion: string;
   if (plan.outcome === 'converged') {
@@ -108,6 +118,9 @@ export function renderStatusHuman(plan: ReconciliationPlan): string {
     '',
     'Projections:',
     ...projectionLines,
+    '',
+    `Skill summary: ${skillSummary.unchanged} unchanged · ${skillSummary.overrides} overrides · ` +
+      `${skillSummary.changes} changes · ${skillSummary.conflicts} conflicts`,
     '',
     conclusion,
   ].join('\n');

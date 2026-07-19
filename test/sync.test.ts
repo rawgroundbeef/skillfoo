@@ -387,3 +387,27 @@ test('reconciles active, removed, and retained-blocked rows as distinct sets', a
   assert.ok(state.output.some((line) => line.includes('⊘ gamma')));
   assert.equal(managedRow(readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8'), 'gamma'), retainedRow);
 });
+
+test('reconciles Override projections without claiming local content came from the registry', async (context) => {
+  const state = makeFixture(context, ['alpha']);
+  await sync(state.consumer);
+  const emitted = join(state.consumer, '.agents', 'skills', 'alpha', 'SKILL.md');
+  writeFileSync(
+    emitted,
+    '---\nname: alpha\ndescription: Repository alpha guidance. More detail.\n---\n\n# local\n',
+  );
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nemit: .agents/skills\nskills: [alpha]\noverrides: { alpha: local }\n',
+  );
+  const localBytes = readFileSync(emitted);
+  state.output.length = 0;
+
+  await sync(state.consumer);
+
+  assert.deepEqual(readFileSync(emitted), localBytes);
+  assert.ok(state.output.some((line) => /reconciled 1 configured skill with/.test(line)));
+  assert.equal(state.output.some((line) => /^synced .* from /.test(line)), false);
+  assert.ok(state.output.some((line) => /1 override/.test(line)));
+  assert.match(readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8'), /Repository alpha guidance.*local override/);
+});

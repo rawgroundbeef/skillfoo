@@ -108,7 +108,7 @@ test('plans a fresh consumer completely without mutating it', (context) => {
   assert.equal(adapter(plan, 'beta').state, 'update');
   assert.equal(plan.outcome, 'changes_available');
   assert.deepEqual(plan.summary, {
-    skills: { unchanged: 0, changes: 2, conflicts: 0 },
+    skills: { unchanged: 0, overrides: 0, changes: 2, conflicts: 0 },
     projections: { unchanged: 0, changes: 3, conflicts: 0 },
   });
   assert.deepEqual(snapshot(state.consumer), before);
@@ -327,4 +327,154 @@ test('unsafe adapter ancestors block active work and managed removal', async (co
     { state: record(removal, 'alpha').state, reason: record(removal, 'alpha').reason },
     { state: 'removal_blocked', reason: 'adapter_ownership_unproven' },
   );
+});
+
+test('keeps a live Override healthy across local edits and registry evolution', async (context) => {
+  const state = fixture(context, ['alpha']);
+  await converge(state);
+  const previousEntry = readLock(state.consumer).skills.alpha;
+  assert.ok(previousEntry);
+  const emitted = join(state.consumer, '.agents', 'skills', 'alpha');
+  writeFileSync(
+    join(emitted, 'SKILL.md'),
+    '---\nname: alpha\ndescription: Local alpha guidance. More detail.\n---\n\n# local\n',
+  );
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [alpha]\noverrides: { alpha: local }\n',
+  );
+
+  const unchangedRegistry = planReconciliation(state.consumer);
+  assert.deepEqual(
+    {
+      state: record(unchangedRegistry, 'alpha').state,
+      registryState: record(unchangedRegistry, 'alpha').registryState,
+    },
+    { state: 'override', registryState: 'unchanged' },
+  );
+  assert.deepEqual(unchangedRegistry.summary.skills, {
+    unchanged: 0,
+    overrides: 1,
+    changes: 0,
+    conflicts: 0,
+  });
+  assert.deepEqual(unchangedRegistry.nextLock.skills.alpha, previousEntry);
+  assert.match(
+    unchangedRegistry.projections[0]?.kind === 'agents_md'
+      ? (unchangedRegistry.projections[0].nextContents ?? '')
+      : '',
+    /Local alpha guidance\. \(local override; edit in this repository\)/,
+  );
+
+  await sync(state.consumer, { output: () => undefined });
+  writeSkill(state.registry, 'alpha', 'New registry alpha guidance.');
+  const changedRegistry = planReconciliation(state.consumer);
+  assert.equal(record(changedRegistry, 'alpha').state, 'override');
+  assert.equal(record(changedRegistry, 'alpha').registryState, 'changed');
+  assert.equal(changedRegistry.outcome, 'converged');
+  assert.deepEqual(changedRegistry.nextLock.skills.alpha, previousEntry);
+
+  rmSync(join(state.registry, 'alpha'), { recursive: true });
+  const missingRegistry = planReconciliation(state.consumer);
+  assert.equal(record(missingRegistry, 'alpha').state, 'override');
+  assert.equal(record(missingRegistry, 'alpha').registryState, 'missing');
+  assert.equal(missingRegistry.outcome, 'converged');
+  assert.deepEqual(missingRegistry.nextLock.skills.alpha, previousEntry);
+  assert.equal(readFileSync(join(emitted, 'SKILL.md'), 'utf8').includes('# local'), true);
+});
+
+test('honors ownership-consistent manual Override policy when content matches the registry', async (context) => {
+  const state = fixture(context, ['alpha']);
+  await converge(state);
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [alpha]\noverrides: { alpha: local }\n',
+  );
+  const plan = planReconciliation(state.consumer);
+  assert.equal(record(plan, 'alpha').state, 'override');
+  assert.equal(record(plan, 'alpha').registryState, 'unchanged');
+});
+
+test('degrades missing Override content without recreating its row or adapter', async (context) => {
+  const state = fixture(context, ['alpha']);
+  await converge(state);
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [alpha]\noverrides:\n  alpha: local\n',
+  );
+  const emitted = join(state.consumer, '.agents', 'skills', 'alpha');
+  const adapterPath = join(state.consumer, '.claude', 'skills', 'alpha');
+  rmSync(emitted, { recursive: true });
+
+  const degraded = planReconciliation(state.consumer);
+  assert.deepEqual(
+    { state: record(degraded, 'alpha').state, reason: record(degraded, 'alpha').reason },
+    { state: 'drifted', reason: 'override_content_missing' },
+  );
+  assert.equal(
+    degraded.projections.some(
+      (projection) => projection.kind === 'claude_adapter' && projection.skill === 'alpha',
+    ),
+    false,
+  );
+
+  const agentsPath = join(state.consumer, 'AGENTS.md');
+  const withoutRow = readFileSync(agentsPath, 'utf8').replace(/^.*\[alpha\].*\n/m, '');
+  writeFileSync(agentsPath, withoutRow);
+  rmSync(adapterPath);
+  await sync(state.consumer, { output: () => undefined });
+  assert.equal(existsSync(emitted), false);
+  assert.doesNotMatch(readFileSync(agentsPath, 'utf8'), /\[alpha\]/);
+  assert.equal(existsSync(adapterPath), false);
+});
+
+test('preserves an unsafe Override path and suppresses target projection synthesis', async (context) => {
+  const state = fixture(context, ['alpha']);
+  await converge(state);
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [alpha]\noverrides: { alpha: local }\n',
+  );
+  const emitted = join(state.consumer, '.agents', 'skills', 'alpha');
+  const adapterPath = join(state.consumer, '.claude', 'skills', 'alpha');
+  rmSync(emitted, { recursive: true });
+  writeFileSync(emitted, 'unsafe Override shape\n');
+  const agentsPath = join(state.consumer, 'AGENTS.md');
+  writeFileSync(agentsPath, readFileSync(agentsPath, 'utf8').replace(/^.*\[alpha\].*\n/m, ''));
+  rmSync(adapterPath);
+
+  const plan = planReconciliation(state.consumer);
+  assert.deepEqual(
+    { state: record(plan, 'alpha').state, reason: record(plan, 'alpha').reason },
+    { state: 'drifted', reason: 'emitted_path_not_managed_directory' },
+  );
+  assert.equal(
+    plan.projections.some(
+      (projection) => projection.kind === 'claude_adapter' && projection.skill === 'alpha',
+    ),
+    false,
+  );
+  await sync(state.consumer, { output: () => undefined });
+  assert.equal(readFileSync(emitted, 'utf8'), 'unsafe Override shape\n');
+  assert.doesNotMatch(readFileSync(agentsPath, 'utf8'), /\[alpha\]/);
+  assert.equal(existsSync(adapterPath), false);
+});
+
+test('rejects contradictory or unowned Override policy before planning mutations', async (context) => {
+  const state = fixture(context, ['alpha', 'beta']);
+  await converge(state);
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [beta]\noverrides: { alpha: local }\n',
+  );
+  assert.throws(() => planReconciliation(state.consumer), /override must also be selected.*alpha/);
+
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    'registry: ../registry\nskills: [alpha]\noverrides: { alpha: local }\n',
+  );
+  const lock = readLock(state.consumer);
+  delete lock.skills.alpha;
+  writeLock(state.consumer, lock);
+  assert.throws(() => planReconciliation(state.consumer), /override has no Managed ownership.*alpha/);
 });

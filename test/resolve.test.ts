@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import {
   existsSync,
+  chmodSync,
+  linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readlinkSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -43,8 +46,12 @@ function writeSkill(
   );
 }
 
-function fixture(context: TestContext, names: readonly string[] = ['alpha']): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'skillfoo-resolve-'));
+function fixture(
+  context: TestContext,
+  names: readonly string[] = ['alpha'],
+  rootPrefix = 'skillfoo-resolve-',
+): Fixture {
+  const root = mkdtempSync(join(tmpdir(), rootPrefix));
   const registry = join(root, 'registry');
   const consumer = join(root, 'consumer');
   mkdirSync(registry);
@@ -54,6 +61,7 @@ function fixture(context: TestContext, names: readonly string[] = ['alpha']): Fi
     join(consumer, '.skillfoo.yml'),
     `registry: ../registry\nskills: ${JSON.stringify(names)}\n`,
   );
+  writeLock(consumer, { lockfileVersion: 1, skills: {} });
   context.after(() => rmSync(root, { recursive: true, force: true }));
   return { root, registry, consumer };
 }
@@ -103,8 +111,13 @@ function snapshotTree(root: string): string[] {
 }
 
 function transactionArtifacts(state: Fixture): string[] {
-  return readdirSync(join(state.consumer, '.agents', 'skills')).filter((name) =>
-    name.startsWith('.skillfoo-resolve-'),
+  const roots = [state.consumer, join(state.consumer, '.agents', 'skills')];
+  return roots.flatMap((root) =>
+    existsSync(root)
+      ? readdirSync(root)
+          .filter((name) => name.startsWith('.skillfoo-resolve-'))
+          .map((name) => join(root, name))
+      : [],
   );
 }
 
@@ -292,7 +305,7 @@ for (const boundaryKind of ['local', 'registry'] as const) {
             },
           },
         }),
-      /stale evidence.*replacement boundary.*previous state restored/,
+      /stale evidence.*content changed after classification/,
     );
 
     if (boundaryKind === 'local') {
@@ -334,7 +347,7 @@ for (const shape of ['file', 'symlink'] as const) {
             },
           },
         }),
-      /stale evidence.*replacement boundary.*previous state restored/,
+      /stale evidence.*no longer a real directory/,
     );
 
     if (shape === 'file') {
@@ -499,7 +512,61 @@ test('an incomplete rollback preserves and reports the exact recovery path', asy
   const match = /recovery data preserved at (.+)$/.exec(thrown.message);
   assert.ok(match?.[1]);
   assert.equal(existsSync(match[1]), true);
-  assert.deepEqual(readFileSync(join(match[1], 'SKILL.md')), localContents);
+  assert.equal(existsSync(join(match[1], 'manifest.json')), true);
+  assert.deepEqual(readFileSync(join(match[1], 'target.before', 'SKILL.md')), localContents);
+});
+
+test('persists an exact recovery tree under a non-ASCII consumer path', async (context) => {
+  const state = fixture(context, ['alpha'], 'skillfoo-resolve-ünicode-');
+  await converge(state);
+  editLocal(state, 'alpha');
+  const target = join(state.consumer, '.agents', 'skills', 'alpha');
+  mkdirSync(join(target, 'nested', 'empty'), { recursive: true });
+  writeFileSync(join(target, 'nested', 'local.txt'), 'local recovery data\n');
+  const before = snapshotTree(target);
+
+  assert.throws(
+    () =>
+      resolveSkill(state.consumer, 'alpha', {
+        direction: 'keep_local',
+        hooks: {
+          afterStep: (step) => {
+            if (step !== 'recovery_persisted') return;
+            const transaction = transactionArtifacts(state)[0];
+            assert.ok(transaction);
+            assert.deepEqual(snapshotTree(join(transaction, 'recovery', 'target.before')), before);
+            throw new Error('injected after Unicode recovery snapshot');
+          },
+        },
+      }),
+    /injected after Unicode recovery snapshot/,
+  );
+
+  assert.deepEqual(snapshotTree(target), before);
+  assert.deepEqual(transactionArtifacts(state), []);
+});
+
+test('refuses symbolic links in a recovery tree before mutation', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const foreign = join(state.root, 'foreign-recovery-target');
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'marker.txt'), 'foreign\n');
+  symlinkSync(
+    foreign,
+    join(state.consumer, '.agents', 'skills', 'alpha', 'nested-link'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  const before = snapshotTree(state.consumer);
+
+  assert.throws(
+    () => resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' }),
+    /unsafe recovery source.*symbolic links are not supported/,
+  );
+
+  assert.deepEqual(snapshotTree(state.consumer), before);
+  assert.deepEqual(transactionArtifacts(state), []);
 });
 
 test('rollback preserves foreign content that replaces its created adapter', async (context) => {
@@ -540,4 +607,310 @@ test('rollback preserves foreign content that replaces its created adapter', asy
   );
   assert.deepEqual(readFileSync(join(state.consumer, '.skillfoo.lock')), lockBefore);
   assert.deepEqual(readFileSync(join(state.consumer, 'AGENTS.md')), agentsBefore);
+});
+
+test('keeps one local Conflict as a live Override and reverses it with take-registry', async (context) => {
+  const state = fixture(context, ['alpha', 'beta']);
+  await converge(state);
+  editLocal(state, 'alpha', 'Alpha customized in this repository. More detail.');
+  const localOnly = join(state.consumer, '.agents', 'skills', 'alpha', 'local-only.txt');
+  writeFileSync(localOnly, 'keep local\n');
+  rmSync(join(state.consumer, '.claude', 'skills', 'alpha'));
+  writeFileSync(
+    join(state.consumer, '.skillfoo.yml'),
+    '# consumer policy\nregistry: ../registry # local source\nskills: [alpha, beta]\n' +
+      'future-settings:\n  reviewer: "keep this" # future key\n',
+  );
+  const localBefore = snapshotTree(join(state.consumer, '.agents', 'skills', 'alpha'));
+  const lockBefore = readFileSync(join(state.consumer, '.skillfoo.lock'));
+  const alphaEntryBefore = readLock(state.consumer).skills.alpha;
+
+  const kept = resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+
+  assert.equal(kept.action, 'kept_local');
+  assert.equal(kept.exitCode, 0);
+  assert.deepEqual(snapshotTree(join(state.consumer, '.agents', 'skills', 'alpha')), localBefore);
+  assert.deepEqual(readFileSync(join(state.consumer, '.skillfoo.lock')), lockBefore);
+  assert.deepEqual(readLock(state.consumer).skills.alpha, alphaEntryBefore);
+  const config = readFileSync(join(state.consumer, '.skillfoo.yml'), 'utf8');
+  assert.match(config, /^# consumer policy/m);
+  assert.match(config, /reviewer: "keep this" # future key/);
+  assert.match(config, /overrides:\n  alpha: local/);
+  const agents = readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /Alpha customized in this repository\. \(local override; edit in this repository\)/);
+  assert.match(agents, /managed by skillfoo/);
+  assert.equal(lstatSync(join(state.consumer, '.claude', 'skills', 'alpha')).isSymbolicLink(), true);
+
+  editLocal(state, 'alpha', 'A later local description.');
+  const retried = resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  assert.equal(retried.action, 'already_overridden');
+  assert.match(readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8'), /A later local description/);
+  const stable = snapshotTree(state.consumer);
+  const noOp = resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  assert.equal(noOp.action, 'already_overridden');
+  assert.deepEqual(snapshotTree(state.consumer), stable);
+
+  writeSkill(state.registry, 'alpha', 'New registry authority.');
+  const taken = resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' });
+  assert.equal(taken.action, 'replaced');
+  assert.equal(taken.exitCode, 0);
+  assert.equal(existsSync(localOnly), false);
+  assert.equal(
+    hashSkillDir(join(state.consumer, '.agents', 'skills', 'alpha')),
+    hashSkillDir(join(state.registry, 'alpha')),
+  );
+  assert.doesNotMatch(readFileSync(join(state.consumer, '.skillfoo.yml'), 'utf8'), /overrides:/);
+  assert.match(readFileSync(join(state.consumer, '.skillfoo.yml'), 'utf8'), /reviewer: "keep this"/);
+  assert.doesNotMatch(managedRow(readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8'), 'alpha'), /local override/);
+});
+
+test('take-registry reports when it only clears matching Override policy', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  const target = join(state.consumer, '.agents', 'skills', 'alpha');
+  const targetBefore = snapshotTree(target);
+  const configPath = join(state.consumer, '.skillfoo.yml');
+  writeFileSync(
+    configPath,
+    `${readFileSync(configPath, 'utf8')}overrides:\n  alpha: local\n`,
+  );
+
+  const result = resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' });
+
+  assert.equal(result.action, 'override_cleared');
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(snapshotTree(target), targetBefore);
+  assert.doesNotMatch(readFileSync(configPath, 'utf8'), /overrides:/);
+});
+
+test('take-registry restores missing Override content and explains when both sides are missing', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  const emitted = join(state.consumer, '.agents', 'skills', 'alpha');
+  rmSync(join(state.consumer, '.agents'), { recursive: true });
+
+  const restored = resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' });
+  assert.equal(restored.action, 'replaced');
+  assert.equal(realDirectoryForTest(emitted), true);
+  assert.doesNotMatch(readFileSync(join(state.consumer, '.skillfoo.yml'), 'utf8'), /overrides:/);
+
+  editLocal(state, 'alpha');
+  resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  rmSync(emitted, { recursive: true });
+  rmSync(join(state.registry, 'alpha'), { recursive: true });
+  const before = snapshotTree(state.consumer);
+  assert.throws(
+    () => resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' }),
+    (error: unknown) =>
+      error instanceof ResolutionRefusalError &&
+      error.state === 'drifted' &&
+      error.reason === 'override_content_missing' &&
+      /both its repository content and current registry source are missing/.test(error.message),
+  );
+  assert.deepEqual(snapshotTree(state.consumer), before);
+});
+
+function realDirectoryForTest(path: string): boolean {
+  const stat = lstatSync(path);
+  return stat.isDirectory() && !stat.isSymbolicLink();
+}
+
+test('keep-local records policy while preserving a foreign adapter as residual conflict', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const adapter = join(state.consumer, '.claude', 'skills', 'alpha');
+  rmSync(adapter);
+  writeFileSync(adapter, 'foreign adapter\n');
+
+  const result = resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  assert.equal(result.action, 'kept_local');
+  assert.equal(result.exitCode, 3);
+  assert.equal(readFileSync(adapter, 'utf8'), 'foreign adapter\n');
+  assert.match(readFileSync(join(state.consumer, '.skillfoo.yml'), 'utf8'), /alpha: local/);
+});
+
+test('keep-local handled failures restore exact config and AGENTS.md bytes', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const before = snapshotTree(state.consumer);
+
+  assert.throws(
+    () =>
+      resolveSkill(state.consumer, 'alpha', {
+        direction: 'keep_local',
+        hooks: {
+          afterStep: (step) => {
+            if (step === 'agents_updated') throw new Error('injected keep-local failure');
+          },
+        },
+      }),
+    /injected keep-local failure.*previous state restored/,
+  );
+  assert.deepEqual(snapshotTree(state.consumer), before);
+  assert.deepEqual(transactionArtifacts(state), []);
+});
+
+test('resolver refuses redirected root metadata before either direction mutates', async (context) => {
+  for (const direction of ['keep_local', 'take_registry'] as const) {
+    for (const name of ['.skillfoo.yml', '.skillfoo.lock', 'AGENTS.md'] as const) {
+      const state = fixture(context);
+      await converge(state);
+      editLocal(state, 'alpha');
+      const path = join(state.consumer, name);
+      const sentinel = join(state.root, `${direction}-${name.replaceAll('.', '_')}.sentinel`);
+      renameSync(path, sentinel);
+      symlinkSync(sentinel, path, 'file');
+      const sentinelBefore = readFileSync(sentinel);
+      const before = snapshotTree(state.consumer);
+
+      assert.throws(
+        () => resolveSkill(state.consumer, 'alpha', { direction }),
+        /unsafe; expected a real regular file/,
+      );
+      assert.deepEqual(readFileSync(sentinel), sentinelBefore);
+      assert.deepEqual(snapshotTree(state.consumer), before);
+    }
+  }
+});
+
+test('resolver refuses root metadata directories before either direction mutates', async (context) => {
+  for (const direction of ['keep_local', 'take_registry'] as const) {
+    for (const name of ['.skillfoo.yml', '.skillfoo.lock', 'AGENTS.md'] as const) {
+      const state = fixture(context);
+      await converge(state);
+      editLocal(state, 'alpha');
+      const path = join(state.consumer, name);
+      renameSync(path, join(state.root, `${direction}-${name.replaceAll('.', '_')}.before`));
+      mkdirSync(path);
+      const before = snapshotTree(state.consumer);
+
+      assert.throws(
+        () => resolveSkill(state.consumer, 'alpha', { direction }),
+        /unsafe; expected a real regular file/,
+      );
+      assert.deepEqual(snapshotTree(state.consumer), before);
+    }
+  }
+});
+
+test('stale config evidence aborts before mutation and preserves the concurrent edit', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const configPath = join(state.consumer, '.skillfoo.yml');
+  const concurrent = 'registry: ../registry\nskills: [alpha]\n# concurrent edit\n';
+
+  assert.throws(
+    () =>
+      resolveSkill(state.consumer, 'alpha', {
+        direction: 'keep_local',
+        hooks: {
+          beforeRevalidation: () => writeFileSync(configPath, concurrent),
+        },
+      }),
+    /stale evidence.*\.skillfoo\.yml/,
+  );
+  assert.equal(readFileSync(configPath, 'utf8'), concurrent);
+  assert.deepEqual(transactionArtifacts(state), []);
+});
+
+test('compare-and-set rollback preserves a concurrent config replacement and durable snapshots', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const configPath = join(state.consumer, '.skillfoo.yml');
+  const configBefore = readFileSync(configPath);
+  const lockBefore = readFileSync(join(state.consumer, '.skillfoo.lock'));
+  const agentsBefore = readFileSync(join(state.consumer, 'AGENTS.md'));
+  const concurrent =
+    'registry: ../registry\nskills: [alpha]\noverrides: { alpha: local }\nconcurrent: true\n';
+
+  let thrown: unknown;
+  try {
+    resolveSkill(state.consumer, 'alpha', {
+      direction: 'keep_local',
+      hooks: {
+        afterStep: (step) => {
+          if (step !== 'config_updated') return;
+          writeFileSync(configPath, concurrent);
+          throw new Error('injected concurrent config replacement');
+        },
+      },
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof Error);
+  const match = /recovery data preserved at (.+)$/.exec(thrown.message);
+  assert.ok(match?.[1]);
+  assert.match(thrown.message, /rollback incomplete.*config.*changed/);
+  assert.equal(readFileSync(configPath, 'utf8'), concurrent);
+  assert.deepEqual(readFileSync(join(match[1], 'config.before')), configBefore);
+  assert.deepEqual(readFileSync(join(match[1], 'lock.before')), lockBefore);
+  assert.deepEqual(readFileSync(join(match[1], 'AGENTS.before')), agentsBefore);
+  assert.equal(existsSync(join(match[1], 'manifest.json')), true);
+});
+
+test('atomic resolver metadata writes preserve hardlink sentinels and file modes', {
+  skip: process.platform === 'win32',
+}, async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const configPath = join(state.consumer, '.skillfoo.yml');
+  const agentsPath = join(state.consumer, 'AGENTS.md');
+  const lockPath = join(state.consumer, '.skillfoo.lock');
+  chmodSync(configPath, 0o640);
+  const configSentinel = join(state.root, 'config.keep.sentinel');
+  const agentsSentinel = join(state.root, 'agents.keep.sentinel');
+  const lockSentinel = join(state.root, 'lock.keep.sentinel');
+  linkSync(configPath, configSentinel);
+  linkSync(agentsPath, agentsSentinel);
+  linkSync(lockPath, lockSentinel);
+  const keepBefore = {
+    config: readFileSync(configSentinel),
+    agents: readFileSync(agentsSentinel),
+    lock: readFileSync(lockSentinel),
+    configInode: lstatSync(configSentinel).ino,
+    agentsInode: lstatSync(agentsSentinel).ino,
+    lockInode: lstatSync(lockSentinel).ino,
+  };
+
+  resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  assert.deepEqual(readFileSync(configSentinel), keepBefore.config);
+  assert.deepEqual(readFileSync(agentsSentinel), keepBefore.agents);
+  assert.deepEqual(readFileSync(lockSentinel), keepBefore.lock);
+  assert.notEqual(lstatSync(configPath).ino, keepBefore.configInode);
+  assert.notEqual(lstatSync(agentsPath).ino, keepBefore.agentsInode);
+  assert.equal(lstatSync(lockPath).ino, keepBefore.lockInode);
+  assert.equal(lstatSync(configPath).mode & 0o777, 0o640);
+
+  writeSkill(state.registry, 'alpha', 'Changed registry baseline.');
+  const takeConfigSentinel = join(state.root, 'config.take.sentinel');
+  const takeAgentsSentinel = join(state.root, 'agents.take.sentinel');
+  const takeLockSentinel = join(state.root, 'lock.take.sentinel');
+  linkSync(configPath, takeConfigSentinel);
+  linkSync(agentsPath, takeAgentsSentinel);
+  linkSync(lockPath, takeLockSentinel);
+  const takeBefore = {
+    config: readFileSync(takeConfigSentinel),
+    agents: readFileSync(takeAgentsSentinel),
+    lock: readFileSync(takeLockSentinel),
+    configInode: lstatSync(takeConfigSentinel).ino,
+    agentsInode: lstatSync(takeAgentsSentinel).ino,
+    lockInode: lstatSync(takeLockSentinel).ino,
+  };
+
+  resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' });
+  assert.deepEqual(readFileSync(takeConfigSentinel), takeBefore.config);
+  assert.deepEqual(readFileSync(takeAgentsSentinel), takeBefore.agents);
+  assert.deepEqual(readFileSync(takeLockSentinel), takeBefore.lock);
+  assert.notEqual(lstatSync(configPath).ino, takeBefore.configInode);
+  assert.notEqual(lstatSync(agentsPath).ino, takeBefore.agentsInode);
+  assert.notEqual(lstatSync(lockPath).ino, takeBefore.lockInode);
+  assert.equal(lstatSync(configPath).mode & 0o777, 0o640);
 });

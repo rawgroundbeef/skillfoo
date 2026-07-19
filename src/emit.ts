@@ -13,6 +13,7 @@ const END = '<!-- skillfoo:end -->';
 export interface DescribedSkill {
   name: string;
   description: string;
+  localOverride?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -65,7 +66,7 @@ function buildBlock(
   const lines = [START];
   if (includeHeading) lines.push('## Skills', '');
   lines.push(
-    `Shared agent skills live in \`${emitRel}/\` (synced by skillfoo — edit them in the source registry, not here):`,
+    managedIntroduction(emitRel),
     '',
   );
   for (const skill of skills) {
@@ -76,7 +77,14 @@ function buildBlock(
 }
 
 function canonicalRow(emitRel: string, skill: DescribedSkill): string {
-  return `- [${skill.name}](${emitRel}/${skill.name}/SKILL.md) — ${skill.description}`;
+  const suffix = skill.localOverride === true
+    ? ' (local override; edit in this repository)'
+    : '';
+  return `- [${skill.name}](${emitRel}/${skill.name}/SKILL.md) — ${skill.description}${suffix}`;
+}
+
+function managedIntroduction(emitRel: string): string {
+  return `Shared agent skills live in \`${emitRel}/\` (managed by skillfoo):`;
 }
 
 function managedSpan(current: string): { start: number; end: number; block: string } | null {
@@ -93,9 +101,11 @@ function reconcileManagedBlock(
   currentBlock: string,
   activeSkills: readonly DescribedSkill[],
   retainedSkills: readonly DescribedSkill[],
+  preservedSkillNames: readonly string[],
 ): string {
   const active = new Map(activeSkills.map((skill) => [skill.name, skill]));
   const retained = new Map(retainedSkills.map((skill) => [skill.name, skill]));
+  const preserved = new Set(preservedSkillNames);
   const represented = new Set<string>();
   const lineEnding = currentBlock.includes('\r\n') ? '\r\n' : '\n';
   const segments = currentBlock.match(/[^\r\n]*(?:\r\n|\n|$)/g)?.filter(Boolean) ?? [];
@@ -106,7 +116,7 @@ function reconcileManagedBlock(
     const line = ending.length > 0 ? segment.slice(0, -ending.length) : segment;
     const row = /^[\t ]*- \[([^\]\r\n]+)\]\(/.exec(line);
     const name = row?.[1];
-    if (name !== undefined && retained.has(name)) {
+    if (name !== undefined && (retained.has(name) || preserved.has(name))) {
       rows.push(segment);
       represented.add(name);
     } else if (name !== undefined) {
@@ -128,7 +138,7 @@ function reconcileManagedBlock(
   const lines = [START];
   if (/^##[\t ]+Skills[\t ]*\r?$/m.test(currentBlock)) lines.push('## Skills', '');
   lines.push(
-    `Shared agent skills live in \`${emitRel}/\` (synced by skillfoo — edit them in the source registry, not here):`,
+    managedIntroduction(emitRel),
     '',
   );
   return `${lines.join(lineEnding)}${lineEnding}${rows.join('')}${END}`;
@@ -157,10 +167,11 @@ export function renderAgentsMd(
   emitRel: string,
   activeSkills: readonly DescribedSkill[],
   retainedSkills: readonly DescribedSkill[] = [],
+  preservedSkillNames: readonly string[] = [],
 ): string | null {
   const skillNames = [...activeSkills, ...retainedSkills];
 
-  if (skillNames.length === 0) {
+  if (skillNames.length === 0 && preservedSkillNames.length === 0) {
     if (current === null) return null;
     const span = managedSpan(current);
     if (span === null) return current;
@@ -173,7 +184,13 @@ export function renderAgentsMd(
   if (current !== null) {
     const span = managedSpan(current);
     if (span !== null) {
-      const block = reconcileManagedBlock(emitRel, span.block, activeSkills, retainedSkills);
+      const block = reconcileManagedBlock(
+        emitRel,
+        span.block,
+        activeSkills,
+        retainedSkills,
+        preservedSkillNames,
+      );
       return current.slice(0, span.start) + block + current.slice(span.end);
     }
 
@@ -215,6 +232,9 @@ export function renderTargetAgentsMd(
   const nextSegments = segments.map((segment) => {
     const ending = segment.endsWith('\r\n') ? '\r\n' : segment.endsWith('\n') ? '\n' : '';
     const line = ending.length > 0 ? segment.slice(0, -ending.length) : segment;
+    if (/^[\t ]*Shared agent skills live in `/.test(line)) {
+      return `${managedIntroduction(emitRel)}${ending || lineEnding}`;
+    }
     const row = /^[\t ]*- \[([^\]\r\n]+)\]\(/.exec(line);
     if (row?.[1] !== skill.name) return segment;
     represented = true;

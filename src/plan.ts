@@ -1,5 +1,4 @@
 import {
-  existsSync,
   lstatSync,
   readFileSync,
 } from 'node:fs';
@@ -9,7 +8,7 @@ import {
   resolveClaudeAdapterCandidate,
   type ClaudeAdapterCandidate,
 } from './adapter.js';
-import { loadConfig, type SkillfooConfig } from './config.js';
+import { CONFIG_NAME, loadConfig, type SkillfooConfig } from './config.js';
 import {
   readSkillDescription,
   renderAgentsMd,
@@ -34,6 +33,7 @@ import { hashSkillDir, walkFiles } from './skilldir.js';
 
 export type SkillState =
   | 'unchanged'
+  | 'override'
   | 'add'
   | 'update'
   | 'lock_update'
@@ -46,6 +46,7 @@ export type ProjectionState = 'unchanged' | 'update' | 'blocked';
 
 export type ConflictReason =
   | 'local_changes'
+  | 'override_content_missing'
   | 'unmanaged_destination'
   | 'unrepresented_local_structure'
   | 'emitted_path_not_managed_directory'
@@ -68,6 +69,7 @@ export interface SkillPlanRecord {
   nextEntry?: LockEntry;
   previousEntry?: LockEntry;
   removalCandidate?: ManagedRemovalCandidate;
+  registryState?: 'unchanged' | 'changed' | 'missing';
 }
 
 export interface AgentsMdProjection {
@@ -93,8 +95,12 @@ export interface SectionSummary {
   conflicts: number;
 }
 
+export interface SkillSectionSummary extends SectionSummary {
+  overrides: number;
+}
+
 export interface ReconciliationSummary {
-  skills: SectionSummary;
+  skills: SkillSectionSummary;
   projections: SectionSummary;
 }
 
@@ -108,12 +114,15 @@ export interface ReconciliationPlan {
   nextLock: LockFile;
   activeSkills: DescribedSkill[];
   retainedSkills: DescribedSkill[];
+  preservedSkillNames: string[];
 }
 
 export interface PlanOptions {
   registryReporter?: (message: string) => void;
   registryCacheRoot?: string;
   registryCatalog?: RegistryCatalog;
+  config?: SkillfooConfig;
+  lock?: LockFile;
 }
 
 const SKILL_CHANGES = new Set<SkillState>(['add', 'update', 'lock_update', 'remove']);
@@ -152,10 +161,11 @@ function currentAgentsMd(cwd: string): string | null {
   }
 }
 
-function summarizeSkills(records: readonly SkillPlanRecord[]): SectionSummary {
-  const summary: SectionSummary = { unchanged: 0, changes: 0, conflicts: 0 };
+function summarizeSkills(records: readonly SkillPlanRecord[]): SkillSectionSummary {
+  const summary: SkillSectionSummary = { unchanged: 0, overrides: 0, changes: 0, conflicts: 0 };
   for (const record of records) {
     if (record.state === 'unchanged') summary.unchanged++;
+    else if (record.state === 'override') summary.overrides++;
     else if (SKILL_CHANGES.has(record.state)) summary.changes++;
     else summary.conflicts++;
   }
@@ -188,13 +198,82 @@ function desiredRecord(
   emitRoot: string,
   configuredSource: string,
   previousEntry: LockEntry | undefined,
+  overridden: boolean,
+  sourceAvailable: boolean,
 ): { record: SkillPlanRecord; description?: DescribedSkill } {
   const sourceDir = join(registryDir, name);
   const destinationDir = directChild(emitRoot, name);
-  const registryHash = hashSkillDir(sourceDir);
-  const fileCount = walkFiles(sourceDir).length;
-  const canonicalEntry: LockEntry = { source: configuredSource, hash: registryHash };
+  const registryHash = sourceAvailable ? hashSkillDir(sourceDir) : undefined;
+  const fileCount = sourceAvailable ? walkFiles(sourceDir).length : 0;
+  const canonicalEntry: LockEntry | undefined =
+    registryHash === undefined ? undefined : { source: configuredSource, hash: registryHash };
   const shape = inspectDestination(destinationDir);
+
+  if (overridden) {
+    if (previousEntry === undefined) {
+      throw new Error(`${CONFIG_NAME} override for ${name} has no Managed ownership in .skillfoo.lock`);
+    }
+    const registryState =
+      registryHash === undefined
+        ? 'missing'
+        : previousEntry.source === configuredSource && previousEntry.hash === registryHash
+          ? 'unchanged'
+          : 'changed';
+    if (shape === 'missing') {
+      return {
+        record: {
+          name,
+          state: 'drifted',
+          reason: 'override_content_missing',
+          fileCount,
+          ...(sourceAvailable ? { sourceDir } : {}),
+          destinationDir,
+          ...(registryHash === undefined ? {} : { registryHash }),
+          nextEntry: previousEntry,
+          previousEntry,
+        },
+      };
+    }
+    if (shape === 'other') {
+      return {
+        record: {
+          name,
+          state: 'drifted',
+          reason: 'emitted_path_not_managed_directory',
+          fileCount,
+          ...(sourceAvailable ? { sourceDir } : {}),
+          destinationDir,
+          ...(registryHash === undefined ? {} : { registryHash }),
+          nextEntry: previousEntry,
+          previousEntry,
+        },
+      };
+    }
+    const currentHash = hashSkillDir(destinationDir);
+    return {
+      record: {
+        name,
+        state: 'override',
+        fileCount: walkFiles(destinationDir).length,
+        ...(sourceAvailable ? { sourceDir } : {}),
+        destinationDir,
+        ...(registryHash === undefined ? {} : { registryHash }),
+        currentHash,
+        nextEntry: previousEntry,
+        previousEntry,
+        registryState,
+      },
+      description: {
+        name,
+        description: readSkillDescription(destinationDir),
+        localOverride: true,
+      },
+    };
+  }
+
+  if (!sourceAvailable || registryHash === undefined || canonicalEntry === undefined) {
+    throw new Error(`internal error: desired registry source for ${name} is missing`);
+  }
 
   if (previousEntry === undefined && shape !== 'missing') {
     return {
@@ -307,7 +386,7 @@ function desiredRecord(
 }
 
 export function planReconciliation(cwd: string, options: PlanOptions = {}): ReconciliationPlan {
-  const config = loadConfig(cwd);
+  const config = options.config ?? loadConfig(cwd);
   const registryOptions = {
     ...(options.registryReporter === undefined ? {} : { reporter: options.registryReporter }),
     ...(options.registryCacheRoot === undefined ? {} : { cacheRoot: options.registryCacheRoot }),
@@ -319,8 +398,32 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
   }
   const registryDir = catalog.directory;
   const available = [...catalog.skills];
-  const wanted = normalizeDesiredNames(config.skills ?? available);
-  const missing = wanted.filter((name) => !available.includes(name));
+  const lock = options.lock ?? readLock(cwd);
+  for (const name of Object.keys(lock.skills)) assertSafeSkillName(name, 'lock');
+
+  const overrideNames = Object.keys(config.overrides);
+  if (config.skills !== null) {
+    const selected = new Set(normalizeDesiredNames(config.skills));
+    const deselectedOverrides = overrideNames.filter((name) => !selected.has(name));
+    if (deselectedOverrides.length > 0) {
+      throw new Error(
+        `${CONFIG_NAME} override must also be selected in "skills:": ${deselectedOverrides.join(', ')}`,
+      );
+    }
+  }
+  const unownedOverrides = overrideNames.filter((name) => !Object.hasOwn(lock.skills, name));
+  if (unownedOverrides.length > 0) {
+    throw new Error(
+      `${CONFIG_NAME} override has no Managed ownership in .skillfoo.lock: ${unownedOverrides.join(', ')}`,
+    );
+  }
+
+  const wanted = normalizeDesiredNames(
+    config.skills ?? [...available, ...overrideNames.filter((name) => !available.includes(name))],
+  );
+  const missing = wanted.filter(
+    (name) => !available.includes(name) && !Object.hasOwn(config.overrides, name),
+  );
   if (missing.length > 0) {
     throw new Error(
       `not in the registry: ${missing.join(', ')}\n` +
@@ -328,13 +431,11 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
     );
   }
 
-  const lock = readLock(cwd);
-  for (const name of Object.keys(lock.skills)) assertSafeSkillName(name, 'lock');
-
   const emitRoot = resolve(cwd, config.emit);
   const skills: SkillPlanRecord[] = [];
   const activeSkills: DescribedSkill[] = [];
   const retainedSkills: DescribedSkill[] = [];
+  const preservedSkillNames: string[] = [];
   const nextLock: LockFile = { lockfileVersion: 1, skills: {} };
 
   for (const name of wanted) {
@@ -344,12 +445,22 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
       emitRoot,
       config.registry,
       Object.hasOwn(lock.skills, name) ? lock.skills[name] : undefined,
+      Object.hasOwn(config.overrides, name),
+      available.includes(name),
     );
     skills.push(planned.record);
     if (planned.record.nextEntry !== undefined) {
       setLockEntry(nextLock.skills, name, planned.record.nextEntry);
     }
     if (planned.description !== undefined) activeSkills.push(planned.description);
+    if (
+      planned.record.state === 'drifted' &&
+      (planned.record.reason === 'override_content_missing' ||
+        (Object.hasOwn(config.overrides, name) &&
+          planned.record.reason === 'emitted_path_not_managed_directory'))
+    ) {
+      preservedSkillNames.push(name);
+    }
   }
 
   const wantedSet = new Set(wanted);
@@ -393,6 +504,7 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
     config.emit,
     activeSkills,
     retainedSkills,
+    preservedSkillNames,
   );
   const agentsProjection: AgentsMdProjection = {
     kind: 'agents_md',
@@ -444,5 +556,6 @@ export function planReconciliation(cwd: string, options: PlanOptions = {}): Reco
     nextLock,
     activeSkills,
     retainedSkills,
+    preservedSkillNames,
   };
 }
