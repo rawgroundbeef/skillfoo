@@ -566,6 +566,25 @@ test('the compiled resolver keeps streams clean and returns residual exits 0, 2,
     assert.equal(resolved.stderr, '');
     assert.match(resolved.stdout, /Resolved alpha:.*local edits were discarded.*converged/s);
 
+    const matching = setup('matching');
+    const matchingConfig = resolve(matching.consumer, '.skillfoo.yml');
+    writeFileSync(
+      matchingConfig,
+      `${readFileSync(matchingConfig, 'utf8')}overrides:\n  alpha: local\n`,
+    );
+    const matchingSkill = resolve(matching.consumer, '.agents', 'skills', 'alpha', 'SKILL.md');
+    const matchingBefore = readFileSync(matchingSkill);
+    const cleared = spawnSync(
+      process.execPath,
+      [entrypoint, 'resolve', 'alpha', '--take-registry'],
+      { cwd: matching.consumer, encoding: 'utf8' },
+    );
+    assert.equal(cleared.status, 0);
+    assert.equal(cleared.stderr, '');
+    assert.match(cleared.stdout, /Override policy was cleared; content already matched the registry/);
+    assert.doesNotMatch(cleared.stdout, /local edits were discarded/);
+    assert.deepEqual(readFileSync(matchingSkill), matchingBefore);
+
     const pending = setup('pending');
     edit(pending.consumer, 'alpha');
     writeSkill(pending.registry, 'beta');

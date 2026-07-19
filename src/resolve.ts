@@ -62,6 +62,7 @@ export type ResolutionOutcomeCode = 0 | 2 | 3;
 export type ResolutionDirection = 'take_registry' | 'keep_local';
 export type ResolutionAction =
   | 'replaced'
+  | 'override_cleared'
   | 'already_current'
   | 'kept_local'
   | 'already_overridden';
@@ -346,7 +347,7 @@ function refusalMessage(
     if (reason === 'override_content_missing') {
       return direction === 'keep_local'
         ? `${skill} is an Override whose repository content is missing; restore safe local content or use --take-registry`
-        : `${skill} cannot take the registry because its current source is unavailable`;
+        : `${skill} cannot take the registry because both its repository content and current registry source are missing; restore the registry source before --take-registry or restore safe local content`;
     }
     if (reason === 'emitted_path_not_managed_directory') {
       return `${skill} has an unsafe emitted path; restore a real managed directory before using ${action}`;
@@ -662,16 +663,20 @@ function assertTransactionRootEvidence(evidence: TargetEvidence, state: Transact
   }
 }
 
+function shouldInstallTarget(evidence: TargetEvidence): boolean {
+  return (
+    evidence.targetWasMissing ||
+    evidence.localHash === null ||
+    evidence.localHash !== evidence.registryHash
+  );
+}
+
 function installTarget(
   evidence: TargetEvidence,
   state: TransactionState,
   hooks: ResolutionHooks | undefined,
 ): void {
-  const shouldInstall =
-    evidence.targetWasMissing ||
-    evidence.localHash === null ||
-    evidence.localHash !== evidence.registryHash;
-  if (!shouldInstall) return;
+  if (!shouldInstallTarget(evidence)) return;
 
   assertTransactionRootEvidence(evidence, state);
 
@@ -811,7 +816,9 @@ function executeTransaction(evidence: TargetEvidence, options: ResolutionOptions
           ? evidence.wasOverridden
             ? 'already_overridden'
             : 'kept_local'
-          : 'replaced',
+          : shouldInstallTarget(evidence)
+            ? 'replaced'
+            : 'override_cleared',
       exitCode,
       plan: postPlan,
     };

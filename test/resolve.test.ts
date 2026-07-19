@@ -664,7 +664,26 @@ test('keeps one local Conflict as a live Override and reverses it with take-regi
   assert.doesNotMatch(managedRow(readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8'), 'alpha'), /local override/);
 });
 
-test('take-registry restores missing Override content but refuses a missing source', async (context) => {
+test('take-registry reports when it only clears matching Override policy', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  const target = join(state.consumer, '.agents', 'skills', 'alpha');
+  const targetBefore = snapshotTree(target);
+  const configPath = join(state.consumer, '.skillfoo.yml');
+  writeFileSync(
+    configPath,
+    `${readFileSync(configPath, 'utf8')}overrides:\n  alpha: local\n`,
+  );
+
+  const result = resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' });
+
+  assert.equal(result.action, 'override_cleared');
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(snapshotTree(target), targetBefore);
+  assert.doesNotMatch(readFileSync(configPath, 'utf8'), /overrides:/);
+});
+
+test('take-registry restores missing Override content and explains when both sides are missing', async (context) => {
   const state = fixture(context);
   await converge(state);
   editLocal(state, 'alpha');
@@ -679,11 +698,16 @@ test('take-registry restores missing Override content but refuses a missing sour
 
   editLocal(state, 'alpha');
   resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });
+  rmSync(emitted, { recursive: true });
   rmSync(join(state.registry, 'alpha'), { recursive: true });
   const before = snapshotTree(state.consumer);
   assert.throws(
     () => resolveSkill(state.consumer, 'alpha', { direction: 'take_registry' }),
-    (error: unknown) => error instanceof ResolutionRefusalError && error.state === 'override',
+    (error: unknown) =>
+      error instanceof ResolutionRefusalError &&
+      error.state === 'drifted' &&
+      error.reason === 'override_content_missing' &&
+      /both its repository content and current registry source are missing/.test(error.message),
   );
   assert.deepEqual(snapshotTree(state.consumer), before);
 });

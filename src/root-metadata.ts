@@ -40,6 +40,10 @@ function isMissing(error: unknown): boolean {
   );
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function identity(stat: Stats): FileIdentity {
   return {
     device: stat.dev,
@@ -165,7 +169,12 @@ export function atomicReplaceRootMetadata(
     try {
       unlinkSync(temporary);
     } catch (cleanupError) {
-      if (!isMissing(cleanupError)) throw cleanupError;
+      if (!isMissing(cleanupError)) {
+        throw new Error(
+          `${errorMessage(error)}; temporary metadata cleanup also failed: ${errorMessage(cleanupError)}`,
+          { cause: error },
+        );
+      }
     }
     throw error;
   }

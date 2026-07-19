@@ -150,6 +150,8 @@ function renderResolution(result: ResolutionResult): string {
   let first: string;
   if (result.action === 'replaced') {
     first = `Resolved ${result.skill}: the registry version won and local edits were discarded.`;
+  } else if (result.action === 'override_cleared') {
+    first = `Resolved ${result.skill}: the local Override policy was cleared; content already matched the registry.`;
   } else if (result.action === 'already_current') {
     first = `No change for ${result.skill}: this Managed skill already matches the current registry.`;
   } else if (result.action === 'kept_local') {
