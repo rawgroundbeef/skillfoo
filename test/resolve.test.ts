@@ -46,8 +46,12 @@ function writeSkill(
   );
 }
 
-function fixture(context: TestContext, names: readonly string[] = ['alpha']): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'skillfoo-resolve-'));
+function fixture(
+  context: TestContext,
+  names: readonly string[] = ['alpha'],
+  rootPrefix = 'skillfoo-resolve-',
+): Fixture {
+  const root = mkdtempSync(join(tmpdir(), rootPrefix));
   const registry = join(root, 'registry');
   const consumer = join(root, 'consumer');
   mkdirSync(registry);
@@ -510,6 +514,59 @@ test('an incomplete rollback preserves and reports the exact recovery path', asy
   assert.equal(existsSync(match[1]), true);
   assert.equal(existsSync(join(match[1], 'manifest.json')), true);
   assert.deepEqual(readFileSync(join(match[1], 'target.before', 'SKILL.md')), localContents);
+});
+
+test('persists an exact recovery tree under a non-ASCII consumer path', async (context) => {
+  const state = fixture(context, ['alpha'], 'skillfoo-resolve-ünicode-');
+  await converge(state);
+  editLocal(state, 'alpha');
+  const target = join(state.consumer, '.agents', 'skills', 'alpha');
+  mkdirSync(join(target, 'nested', 'empty'), { recursive: true });
+  writeFileSync(join(target, 'nested', 'local.txt'), 'local recovery data\n');
+  const before = snapshotTree(target);
+
+  assert.throws(
+    () =>
+      resolveSkill(state.consumer, 'alpha', {
+        direction: 'keep_local',
+        hooks: {
+          afterStep: (step) => {
+            if (step !== 'recovery_persisted') return;
+            const transaction = transactionArtifacts(state)[0];
+            assert.ok(transaction);
+            assert.deepEqual(snapshotTree(join(transaction, 'recovery', 'target.before')), before);
+            throw new Error('injected after Unicode recovery snapshot');
+          },
+        },
+      }),
+    /injected after Unicode recovery snapshot/,
+  );
+
+  assert.deepEqual(snapshotTree(target), before);
+  assert.deepEqual(transactionArtifacts(state), []);
+});
+
+test('refuses symbolic links in a recovery tree before mutation', async (context) => {
+  const state = fixture(context);
+  await converge(state);
+  editLocal(state, 'alpha');
+  const foreign = join(state.root, 'foreign-recovery-target');
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, 'marker.txt'), 'foreign\n');
+  symlinkSync(
+    foreign,
+    join(state.consumer, '.agents', 'skills', 'alpha', 'nested-link'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  const before = snapshotTree(state.consumer);
+
+  assert.throws(
+    () => resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' }),
+    /unsafe recovery source.*symbolic links are not supported/,
+  );
+
+  assert.deepEqual(snapshotTree(state.consumer), before);
+  assert.deepEqual(transactionArtifacts(state), []);
 });
 
 test('rollback preserves foreign content that replaces its created adapter', async (context) => {

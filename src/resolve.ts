@@ -1,9 +1,11 @@
 import {
+  chmodSync,
+  constants,
   copyFileSync,
-  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readlinkSync,
   renameSync,
   rmSync,
@@ -290,6 +292,33 @@ function stageSkill(sourceDir: string, stagedDir: string): void {
   }
 }
 
+function copyRecoveryTree(sourceDir: string, destinationDir: string): void {
+  const source = lstatSync(sourceDir);
+  if (!source.isDirectory() || source.isSymbolicLink()) {
+    throw new Error(`unsafe recovery source ${sourceDir}; expected a real directory`);
+  }
+
+  mkdirSync(destinationDir, { mode: source.mode & 0o7777 });
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = join(sourceDir, entry.name);
+    const destinationPath = join(destinationDir, entry.name);
+    const stat = lstatSync(sourcePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`unsafe recovery source ${sourcePath}; symbolic links are not supported`);
+    }
+    if (stat.isDirectory()) {
+      copyRecoveryTree(sourcePath, destinationPath);
+      continue;
+    }
+    if (!stat.isFile()) {
+      throw new Error(`unsafe recovery source ${sourcePath}; expected a regular file`);
+    }
+    copyFileSync(sourcePath, destinationPath, constants.COPYFILE_EXCL);
+    chmodSync(destinationPath, stat.mode & 0o7777);
+  }
+  chmodSync(destinationDir, source.mode & 0o7777);
+}
+
 function stale(skill: string, detail: string): Error {
   return new Error(`stale evidence for ${skill}: ${detail}; inspect with skillfoo status and retry`);
 }
@@ -435,12 +464,7 @@ function persistRecovery(evidence: TargetEvidence, state: TransactionState): voi
   copySnapshot('lock.before', evidence.lockBefore);
   copySnapshot('AGENTS.before', evidence.agentsBefore);
   if (!evidence.targetWasMissing) {
-    cpSync(evidence.destinationDir, state.targetSnapshotDir, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      verbatimSymlinks: true,
-    });
+    copyRecoveryTree(evidence.destinationDir, state.targetSnapshotDir);
   }
 
   const claudeRoot = resolve(evidence.cwd, '.claude');
@@ -554,12 +578,7 @@ function rollbackTarget(evidence: TargetEvidence, state: TransactionState): void
     return;
   }
   if (!realDirectory(state.targetSnapshotDir)) throw new Error('the target before-snapshot is missing');
-  cpSync(state.targetSnapshotDir, evidence.destinationDir, {
-    recursive: true,
-    force: false,
-    errorOnExist: true,
-    verbatimSymlinks: true,
-  });
+  copyRecoveryTree(state.targetSnapshotDir, evidence.destinationDir);
 }
 
 function rollback(evidence: TargetEvidence, state: TransactionState): string[] {
@@ -742,6 +761,7 @@ function executeTransaction(evidence: TargetEvidence, options: ResolutionOptions
     }
     options.hooks?.afterStep?.('revalidated');
 
+    revalidateTarget(evidence);
     persistRecovery(evidence, state);
     options.hooks?.afterStep?.('recovery_persisted');
     revalidateTarget(evidence);
