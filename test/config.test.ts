@@ -17,6 +17,7 @@ import {
   renderConfig,
   validateEmitPath,
 } from '../src/config.js';
+import { REGISTRY_DIAGNOSTICS, validateRegistrySource } from '../src/registry-source.js';
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'skillfoo-config-'));
@@ -57,6 +58,67 @@ test('renders minimal deterministic configs and normalizes named selections', ()
   );
   assert.equal(renderConfig({ registry: 'path: with # syntax', skills: null }),
     'registry: "path: with # syntax"\n');
+});
+
+test('accepts credential-free registry forms and rejects unsafe URL components generically', () => {
+  for (const source of [
+    '../registry',
+    'github.com/example/skills',
+    'git@example.com:example/skills.git',
+    'ssh://git@example.com/example/skills.git',
+    'https://example.com/example/skills.git',
+    'file:///tmp/example/skills.git',
+  ]) {
+    assert.equal(validateRegistrySource(source), source);
+  }
+
+  const sensitive = 'sensitive-value';
+  for (const source of [
+    `https://user:${sensitive}@example.com/skills.git`,
+    `https://user@${sensitive}.example.com/skills.git`,
+    `https://example.com/skills.git?token=${sensitive}`,
+    `https://example.com/skills.git#${sensitive}`,
+    `file://user@localhost/tmp/${sensitive}.git`,
+    `file:///tmp/skills.git?token=${sensitive}`,
+    `ssh://git:${sensitive}@example.com/skills.git`,
+    `ssh://git@example.com/skills.git?token=${sensitive}`,
+    `ssh://git@example.com/skills.git#${sensitive}`,
+  ]) {
+    assert.throws(
+      () => validateRegistrySource(source),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, ''),
+        );
+        assert.doesNotMatch(error.message, /sensitive|example\.com|token/u);
+        return true;
+      },
+      source,
+    );
+  }
+});
+
+test('rejects ASCII and C1 registry controls before rendering or loading config', () => {
+  withTempDir((dir) => {
+    for (const control of ['\u0000', '\u001b', '\u007f', '\u0085', '\u009f']) {
+      const source = `https://example.com/skills-${control}.git`;
+      assert.throws(
+        () => renderConfig({ registry: source, skills: null }),
+        new RegExp(REGISTRY_DIAGNOSTICS.unsafeControls.replace(/^skillfoo: /u, '')),
+      );
+
+      const configPath = join(dir, '.skillfoo.yml');
+      const contents = `registry: ${JSON.stringify(source)}\n`;
+      writeFileSync(configPath, contents);
+      assert.throws(
+        () => loadConfig(dir),
+        new RegExp(REGISTRY_DIAGNOSTICS.unsafeControls.replace(/^skillfoo: /u, '')),
+      );
+      assert.equal(readFileSync(configPath, 'utf8'), contents);
+    }
+  });
 });
 
 test('creates config exclusively and preserves every existing byte', () => {

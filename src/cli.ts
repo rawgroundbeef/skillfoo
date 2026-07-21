@@ -11,7 +11,7 @@ import { isSafeSkillName } from './skill-name.js';
 import { renderStatusHuman, renderStatusJson, statusExitCode } from './status.js';
 import { sync } from './sync.js';
 
-const VERSION = '0.0.1';
+const VERSION = '1.0.0';
 
 const HELP = `skillfoo — keep your agent skills in sync
 
@@ -234,7 +234,7 @@ export async function run(argv: readonly string[], io: CliIO = processIO): Promi
         io.stdout(SYNC_HELP);
         return 0;
       }
-      await sync(io.cwd(), { output: io.stdout, registryReporter: io.stdout });
+      await sync(io.cwd(), { output: io.stdout, registryReporter: io.stderr });
       return 0;
     } catch (error) {
       io.stderr(`skillfoo: ${errorMessage(error)}`);
@@ -332,7 +332,7 @@ export async function run(argv: readonly string[], io: CliIO = processIO): Promi
           selection,
           ...(parsed.values.emit === undefined ? {} : { emit: parsed.values.emit }),
         },
-        { output: io.stdout, reporter: io.stdout },
+        { output: io.stdout, reporter: io.stderr },
       );
 
       if (result.reconciliation.outcome === 'attention_required') {

@@ -10,6 +10,7 @@ import {
   type RegistryCatalog,
   type RegistryOptions,
 } from './registry.js';
+import { validateRegistrySource } from './registry-source.js';
 import { normalizeDesiredNames } from './skill-name.js';
 import { sync, type SyncResult } from './sync.js';
 
@@ -89,6 +90,7 @@ export async function initializeProject(
   if (request.registry.length === 0) {
     throw new Error('registry must be a non-empty source');
   }
+  validateRegistrySource(request.registry);
   const emit = request.emit ?? DEFAULT_EMIT;
   validateEmitPath(cwd, emit);
 

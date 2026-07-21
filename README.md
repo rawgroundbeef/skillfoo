@@ -6,18 +6,21 @@ skillfoo pulls skills from a **skills registry** into any project as committed f
 agent can read. The registry is the default authority for Managed skills; a project can
 explicitly keep a repository version authoritative as a local Override.
 
-> Early and evolving. Today it provides local project initialization, safe reconciliation,
-> read-only status, and targeted resolution of locally edited Managed skills. GitHub-App PR
-> fan-out remains on the roadmap.
+> The CLI is preparing its first public package. Today it provides local project
+> initialization, safe reconciliation, consumer-repository read-only status, and targeted
+> resolution of locally edited Managed skills. GitHub-App PR fan-out remains on the roadmap.
 
 ## Install
 
-Not yet on npm. From source:
+The release candidate is `skillfoo@1.0.0`. After its public release, install that exact
+version with:
 
 ```sh
-git clone https://github.com/rawgroundbeef/skillfoo
-cd skillfoo && npm install && npm link   # gives you a global `skillfoo`
+npm install --save-exact skillfoo@1.0.0
 ```
+
+The package is not yet published while release readiness is under review. Do not substitute
+a branch, global link, or source checkout for package verification.
 
 ## Quickstart
 
@@ -63,6 +66,12 @@ must be real directories, not symlinks, junctions, files, or special entries.
 Override remains Managed, keeps its prior source baseline in `.skillfoo.lock`, and accepts
 later safe repository edits until the policy is explicitly reversed.
 
+Configure only a registry whose instruction authors you trust. Explicit `sync` copies its
+skill files without semantically sandboxing or approving their contents, and downstream
+agents may follow those instructions. Lockfile hashes identify reconciliation content; they
+do not authenticate the registry author. Remote registries should use Git credential helpers,
+SSH keys, or other out-of-band authentication rather than credentials embedded in a URL.
+
 ## Reconciliation
 
 After initialization, reconcile the configured desired policy at any time:
@@ -96,6 +105,12 @@ Status exits `0` when converged, `2` when ordinary sync can safely apply all pen
 `3` when at least one conflict needs attention, and `1` for usage or operational failures.
 Successful JSON output uses schema version 2 and writes only the JSON document to stdout;
 registry progress and diagnostics use stderr.
+
+Status never writes the consumer repository. A local-path registry is read without network
+or skillfoo cache effects. A Git-backed registry may access the network and create, fetch,
+reset, or safely replace skillfoo's external registry cache. See the complete
+[`status --json` schema 2 contract](docs/status-json-v2.md) for records, ordering, streams,
+exit statuses, and compatibility rules.
 
 ### Resolve one local-edit conflict
 

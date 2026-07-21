@@ -1,7 +1,16 @@
 {
   "name": "skillfoo",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Keep your team's agent skills in one place, synced to every repo.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rawgroundbeef/skillfoo.git"
+  },
+  "homepage": "https://github.com/rawgroundbeef/skillfoo#readme",
+  "bugs": {
+    "url": "https://github.com/rawgroundbeef/skillfoo/issues"
+  },
   "type": "module",
   "bin": {
     "skillfoo": "dist/entrypoint.js"
@@ -15,10 +24,15 @@
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/index.js",
     "check": "npm run typecheck && npm test",
+    "test:package": "node scripts/verify-package.mjs",
     "prepack": "npm run build"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.0.0 || ^24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
     "yaml": "^2.5.0"

@@ -21,6 +21,10 @@
       "source": "github.com/rawgroundbeef/skills",
       "hash": "sha256:9529ef030a50a5a486f67a65d96f801728f14c3bac04ec6ff4a1b9e9baa78a25"
     },
+    "threat-model": {
+      "source": "github.com/rawgroundbeef/skills",
+      "hash": "sha256:940a63d48473687f9761e1d8cae65f51b502ac6c204d950b9e85d051838458c7"
+    },
     "typescript-cli": {
       "source": "github.com/rawgroundbeef/skills",
       "hash": "sha256:695589b69b4347b75a1822406039d6fdc5d63eb59aec16998b03771fa463a59e"

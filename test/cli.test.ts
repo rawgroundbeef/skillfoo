@@ -79,7 +79,7 @@ test('line reader preserves type-ahead input delivered in one stream chunk', asy
 test('prints version successfully', async () => {
   const output = capture();
   assert.equal(await run(['--version'], output.io), 0);
-  assert.deepEqual(output.stdout, ['0.0.1']);
+  assert.deepEqual(output.stdout, ['1.0.0']);
   assert.deepEqual(output.stderr, []);
 });
 
@@ -363,7 +363,7 @@ test('the compiled entrypoint is executable by Node', () => {
   const entrypoint = resolve('dist/entrypoint.js');
   const result = spawnSync(process.execPath, [entrypoint, '--version'], { encoding: 'utf8' });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, '0.0.1\n');
+  assert.equal(result.stdout, '1.0.0\n');
   assert.equal(result.stderr, '');
 });
 
