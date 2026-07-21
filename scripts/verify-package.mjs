@@ -778,6 +778,7 @@ function assertGitCacheContract(installation, root, baseEnv, observedRegistryLin
   assert.notEqual(firstCache, secondCache);
   assert.match(basename(firstCache), /^[a-f0-9]{64}$/u);
   assert.match(basename(secondCache), /^[a-f0-9]{64}$/u);
+  const firstCacheBeforeRetarget = snapshotTree(firstCache);
   runRequired(gitCommand, ['remote', 'set-url', 'origin', firstUrl], { cwd: secondCache });
 
   const recovered = runInstalled(installation, ['status', '--json'], { cwd: secondConsumer, env });
@@ -790,6 +791,7 @@ function assertGitCacheContract(installation, root, baseEnv, observedRegistryLin
     secondUrl,
   );
   assert.equal(snapshotTree(legacyDirectory), legacyBefore);
+  assert.equal(snapshotTree(firstCache), firstCacheBeforeRetarget);
   assert.equal(snapshotTree(firstConsumer), firstBefore);
   assert.equal(snapshotTree(secondConsumer), secondBefore);
 }
@@ -1041,19 +1043,20 @@ function exerciseUnsupportedManifestFieldGuards(root, tarball, env) {
 
 function verify(mode) {
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'skillfoo-package-verifier-'));
-  const gitTemporaryRoot = mkdtempSync(join(tmpdir(), 'sf-g-'));
-  const workRoot = join(temporaryRoot, 'owned workspace with spaces é');
-  mkdirSync(workRoot);
-  const env = isolatedEnvironment(workRoot);
-  const supplied = mode.tarball !== undefined;
-  const tarball = supplied ? mode.tarball : packTemporaryArtifact(workRoot, env);
-  if (!existsSync(tarball) || !statSync(tarball).isFile()) fail('supplied tarball is not a file');
-  if (basename(tarball) !== `${PACKAGE_NAME}-${PACKAGE_VERSION}.tgz`) {
-    fail(`tarball filename must be ${PACKAGE_NAME}-${PACKAGE_VERSION}.tgz`);
-  }
-
-  const before = artifactHashes(tarball);
+  let gitTemporaryRoot;
   try {
+    gitTemporaryRoot = mkdtempSync(join(tmpdir(), 'sf-g-'));
+    const workRoot = join(temporaryRoot, 'owned workspace with spaces é');
+    mkdirSync(workRoot);
+    const env = isolatedEnvironment(workRoot);
+    const supplied = mode.tarball !== undefined;
+    const tarball = supplied ? mode.tarball : packTemporaryArtifact(workRoot, env);
+    if (!existsSync(tarball) || !statSync(tarball).isFile()) fail('supplied tarball is not a file');
+    if (basename(tarball) !== `${PACKAGE_NAME}-${PACKAGE_VERSION}.tgz`) {
+      fail(`tarball filename must be ${PACKAGE_NAME}-${PACKAGE_VERSION}.tgz`);
+    }
+
+    const before = artifactHashes(tarball);
     assertPayload(tarball);
     readPackagedManifest(tarball);
     const installation = installArtifact(workRoot, tarball, env);
@@ -1089,8 +1092,13 @@ function verify(mode) {
       `${PACKAGE_NAME}@${PACKAGE_VERSION} installed-package verification passed (${EXPECTED_PACKAGE_FILES.length} files, schema 2, exits 0/1/2/3, seven registry diagnostics)\n`,
     );
   } finally {
-    rmSync(temporaryRoot, { recursive: true, force: true });
-    rmSync(gitTemporaryRoot, { recursive: true, force: true });
+    try {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    } finally {
+      if (gitTemporaryRoot !== undefined) {
+        rmSync(gitTemporaryRoot, { recursive: true, force: true });
+      }
+    }
   }
 }
 

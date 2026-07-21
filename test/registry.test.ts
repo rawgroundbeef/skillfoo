@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { planReconciliation } from '../src/plan.js';
@@ -27,6 +29,26 @@ function git(cwd: string, ...args: string[]): string {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+}
+
+function snapshotTree(root: string): string[] {
+  const entries: string[] = [];
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory).sort()) {
+      const path = join(directory, name);
+      const key = relative(root, path).split(sep).join('/');
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) entries.push(`link ${key} -> ${readlinkSync(path)}`);
+      else if (stat.isDirectory()) {
+        entries.push(`dir ${key}`);
+        visit(path);
+      } else if (stat.isFile()) {
+        entries.push(`file ${key} ${readFileSync(path).toString('base64')}`);
+      } else entries.push(`special ${key}`);
+    }
+  };
+  visit(root);
+  return entries;
 }
 
 function writeSkill(registry: string, description: string): void {
@@ -214,6 +236,7 @@ test('separates colliding legacy slugs and re-clones a retargeted hashed cache',
     assert.notEqual(firstCache, secondCache);
     assert.match(firstCache.slice(cacheRoot.length + 1), /^[a-f0-9]{64}$/u);
     assert.match(secondCache.slice(cacheRoot.length + 1), /^[a-f0-9]{64}$/u);
+    const firstCacheBeforeRetarget = snapshotTree(firstCache);
 
     git(secondCache, 'remote', 'set-url', 'origin', firstUrl);
     progress.length = 0;
@@ -224,6 +247,7 @@ test('separates colliding legacy slugs and re-clones a retargeted hashed cache',
     assert.deepEqual(recovered.skills, ['second-source']);
     assert.deepEqual([...progress], [REGISTRY_DIAGNOSTICS.recloning]);
     assert.equal(git(secondCache, 'remote', 'get-url', 'origin').trim(), secondUrl);
+    assert.deepEqual(snapshotTree(firstCache), firstCacheBeforeRetarget);
     assert.equal(git(legacyDir, 'rev-parse', 'HEAD'), legacyHeadBefore);
     assert.deepEqual(listRegistrySkills(legacyDir), ['legacy-source']);
   } finally {
