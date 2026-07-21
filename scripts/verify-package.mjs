@@ -912,7 +912,7 @@ function verificationLine() {
 }
 
 function exerciseReleaseModeCommands() {
-  const root = mkdtempSync(join(tmpdir(), 'skillfoo-release-mode-verifier-'));
+  const root = mkdtempSync(join(tmpdir(), 'sf-r-'));
   try {
     const workRoot = join(root, 'owned release mode workspace é');
     mkdirSync(workRoot);
@@ -922,7 +922,7 @@ function exerciseReleaseModeCommands() {
     const tarballsBefore = listFiles(workRoot).filter((path) => path.endsWith('.tgz'));
     const manifestPath = join(workRoot, 'release-manifest.json');
     const verifier = fileURLToPath(import.meta.url);
-    const childTemporaryRoot = join(workRoot, 'child temporary roots');
+    const childTemporaryRoot = join(root, 't');
     mkdirSync(childTemporaryRoot);
     const suppliedEnv = {
       ...env,
