@@ -710,11 +710,11 @@ function assertDiscardedGitOutput(installation, root, baseEnv, observedRegistryL
 }
 
 function assertGitCacheContract(installation, root, baseEnv, observedRegistryLines) {
-  const fixture = join(root, 'git cache fixtures');
+  const fixture = join(root, 'git-cache-fixtures');
   const home = join(fixture, 'home');
   const cacheRoot = join(home, '.skillfoo', 'registries');
-  const registry = join(fixture, 'ordinary registry');
-  const consumer = join(fixture, 'ordinary consumer');
+  const registry = join(fixture, 'ordinary-registry');
+  const consumer = join(fixture, 'ordinary-consumer');
   mkdirSync(home, { recursive: true });
   mkdirSync(consumer, { recursive: true });
   initializeGitRegistry(registry, 'alpha');
@@ -1063,7 +1063,7 @@ function verify(mode) {
     assertStatusContract(installation, workRoot, env, observedRegistryLines);
     assertUnsafeSources(installation, workRoot, env, observedRegistryLines);
     assertDiscardedGitOutput(installation, workRoot, env, observedRegistryLines);
-    assertGitCacheContract(installation, workRoot, env, observedRegistryLines);
+    assertGitCacheContract(installation, temporaryRoot, env, observedRegistryLines);
 
     for (const line of REGISTRY_LINES) {
       assert.ok(Buffer.byteLength(line, 'utf8') <= 160, `registry line exceeds 160 bytes: ${line}`);
