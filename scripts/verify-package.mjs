@@ -69,7 +69,6 @@ const EXPECTED_PACKAGE_FILES = [
   'package.json',
 ].sort();
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -114,35 +113,14 @@ function parseArguments(argv) {
 }
 
 function run(command, args, options = {}) {
-  let executable = command;
-  let spawnArguments = args;
-  let windowsVerbatimArguments = options.windowsVerbatimArguments ?? false;
-
-  if (process.platform === 'win32' && command.toLowerCase().endsWith('.cmd')) {
-    const unsupported = /["%\r\n\u0000]/u;
-    if (unsupported.test(command) || args.some((argument) => unsupported.test(argument))) {
-      fail('Windows package verification received an unsupported command character');
-    }
-    const commandArguments = args.map((argument) => `"${argument}"`).join(' ');
-    executable = process.env.ComSpec ?? 'cmd.exe';
-    spawnArguments = [
-      '/d',
-      '/s',
-      '/v:off',
-      '/c',
-      `""${command}"${commandArguments.length === 0 ? '' : ` ${commandArguments}`}"`,
-    ];
-    windowsVerbatimArguments = true;
-  }
-
-  const result = spawnSync(executable, spawnArguments, {
+  const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env,
     encoding: 'utf8',
     input: options.input,
     maxBuffer: 16 * 1024 * 1024,
     shell: false,
-    windowsVerbatimArguments,
+    windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
     windowsHide: true,
   });
   if (result.error !== undefined) throw result.error;
@@ -157,6 +135,21 @@ function runRequired(command, args, options = {}) {
   const result = run(command, args, options);
   if (result.status !== 0) {
     fail(`${basename(command)} failed with status ${String(result.status)}: ${result.stderr || result.stdout}`);
+  }
+  return result;
+}
+
+function runNpmRequired(args, options = {}) {
+  if (process.platform !== 'win32') return runRequired('npm', args, options);
+
+  const configuredCli = process.env.npm_execpath;
+  const fallbackCli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  const cli = configuredCli !== undefined && existsSync(configuredCli) ? configuredCli : fallbackCli;
+  if (!existsSync(cli)) fail('npm CLI entrypoint not found for Windows package verification');
+
+  const result = run(process.execPath, [cli, ...args], options);
+  if (result.status !== 0) {
+    fail(`npm failed with status ${String(result.status)}: ${result.stderr || result.stdout}`);
   }
   return result;
 }
@@ -261,8 +254,7 @@ function assertPayload(path, packFiles) {
 function packTemporaryArtifact(root, env) {
   const destination = join(root, 'packed artifact');
   mkdirSync(destination, { recursive: true });
-  const result = runRequired(
-    npmCommand,
+  const result = runNpmRequired(
     ['pack', '--json', '--pack-destination', destination],
     { cwd: repositoryRoot, env },
   );
@@ -361,8 +353,7 @@ function installArtifact(root, tarball, env) {
     join(project, 'package.json'),
     `${JSON.stringify({ name: 'skillfoo-package-verifier', private: true }, null, 2)}\n`,
   );
-  runRequired(
-    npmCommand,
+  runNpmRequired(
     ['install', '--save-exact', '--no-audit', '--no-fund', tarball],
     { cwd: project, env },
   );
