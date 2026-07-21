@@ -307,10 +307,12 @@ public.
   mixed-case/non-ASCII JSON ordering; no consumer-repository status mutation;
   and progress-only stderr plus expected cache mutation through an isolated
   local Git registry.
-- Run full repository checks and installed-package verification on the existing
-  Node 22/24 by Ubuntu/macOS/Windows matrix. Replace the shallow one-platform
-  pack dry run rather than retaining a second weaker release signal. Add the
-  two exact-minimum Ubuntu jobs as a separate compatibility proof.
+- Run full repository checks, installed-package verification, and an
+  end-to-end exercise of the supplied-tarball/manifest command modes on the
+  existing Node 22/24 by Ubuntu/macOS/Windows matrix. Replace the shallow
+  one-platform pack dry run rather than retaining a second weaker release
+  signal. Add the two exact-minimum Ubuntu jobs as a separate compatibility
+  proof.
 - Document the machine contract in a dedicated versioned document and link it
   from install/status guidance. Include a minimal consumer pattern that parses
   complete stdout, checks the schema version first, accepts process statuses

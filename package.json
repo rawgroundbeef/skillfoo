@@ -25,6 +25,7 @@
     "test": "npm run build && tsc -p tsconfig.test.json && node --test .test-dist/test/index.js",
     "check": "npm run typecheck && npm test",
     "test:package": "node scripts/verify-package.mjs",
+    "test:release-modes": "node scripts/verify-package.mjs --exercise-release-modes",
     "prepack": "npm run build"
   },
   "engines": {

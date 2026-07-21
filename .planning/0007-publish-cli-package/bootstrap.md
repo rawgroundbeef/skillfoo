@@ -273,6 +273,11 @@ pull request or the slice workflow reaches that authorized step.
    `--tarball <absolute>` mode must instead run the identical full suite against
    that supplied file without packing, deleting, or mutating it, and may emit a
    structured release manifest after success.
+   Add a separate `npm run test:release-modes` harness that invokes the real
+   supplied-tarball and manifest-checker command modes. It must prove the
+   supplied artifact is byte-identical and not repacked, the emitted manifest
+   is exact and passes a subsequent check, tampering is rejected, and a failed
+   supplied-artifact verification cleans its owned temporary state.
    The manifest checker must recompute SHA-256, npm shasum, and npm integrity
    from raw bytes immediately before both draft attachment and human npm
    publication. Mismatch stops for a new build, full verification, manifest,
@@ -280,9 +285,10 @@ pull request or the slice workflow reaches that authorized step.
 6. Add targeted unit/process assertions only where the package verifier or
    contract doc exposes a real gap. Add a documented consumer guard test for
    schema 2 acceptance and unknown-version rejection.
-7. Run `npm run test:package` in every existing Node 22/24 and OS matrix job,
-   add exact `22.0.0`/`24.0.0` Ubuntu jobs that run repository and package
-   checks, and remove the standalone dry-run package job.
+7. Run `npm run test:package` and `npm run test:release-modes` in every existing
+   Node 22/24 and OS matrix job, add exact `22.0.0`/`24.0.0` Ubuntu jobs that run
+   repository and both package checks, and remove the standalone dry-run package
+   job.
 8. Add `docs/releasing.md` with separate pre-merge; post-merge credential-free,
    no-public-write artifact build/verification; structured-manifest approval;
    narrow tag/draft-release execution; private human npm publication of the
@@ -310,30 +316,31 @@ Run from the repository root and address failures at their owning layer:
    final commit.
 2. `npm run check`
 3. `npm run test:package`
-4. `npm pack --json --pack-destination <temporary-directory>` and inspect the
+4. Inspect `git status --short`, ensure every intended slice file is tracked,
+   then create an intentional release-readiness implementation commit containing
+   the complete planning, ADR, metadata, documentation, test, and CI diff. Do
+   not leave unstaged or untracked slice work outside that commit.
+5. `npm run test:release-modes` from the clean committed branch.
+6. `npm pack --json --pack-destination <temporary-directory>` and inspect the
    real manifest, shasum, integrity, and entries; do not leave the tarball in
    the repository.
    This pre-PR candidate is not the later release artifact. The release runbook
    separately requires supplied-tarball verification of the once-built retained
    final file before manifest authorization and forbids a later repack.
-5. Inspect `git status --short`, ensure every intended slice file is tracked,
-   then create an intentional release-readiness implementation commit containing
-   the complete planning, ADR, metadata, documentation, test, and CI diff. Do
-   not leave unstaged or untracked slice work outside that commit.
-6. Run `git diff --check main...HEAD` and inspect the complete `main...HEAD`
+7. Run `git diff --check main...HEAD` and inspect the complete `main...HEAD`
    diff after the commit.
-7. Run only the pre-publication sections and **Local release readiness** pass
+8. Run only the pre-publication sections and **Local release readiness** pass
    criterion in `.planning/0007-publish-cli-package/uat.md` against a disposable
    registry and consumer outside this repository. The pull-request matrix does
    not exist yet, and the **Authorized public release** section/criterion is
    intentionally impossible and forbidden before merge.
-8. Spawn a fresh-context reviewer using the repository `review` skill against
+9. Spawn a fresh-context reviewer using the repository `review` skill against
    the committed `main...HEAD` range. Address every **Request changes** finding
    in follow-up commits, rerun verification, and repeat fresh review over the
    updated range until it returns **APPROVE**.
-9. Use the repository `pr` skill to open the release-readiness PR only after the
+10. Use the repository `pr` skill to open the release-readiness PR only after the
    review approves. The PR is not authorization to tag, release, or publish.
-10. Wait for the PR's six latest-patch Node/OS jobs and two exact-lower-bound
+11. Wait for the PR's six latest-patch Node/OS jobs and two exact-lower-bound
     Ubuntu jobs, and require the **Pull-request matrix readiness** criterion. If
     a job fails, return to implementation, commit the fix, rerun local
     verification and fresh review, and update the PR. Once all eight checks
@@ -342,7 +349,8 @@ Run from the repository root and address failures at their owning layer:
 
 CI must independently pass the six Node 22/24 by Ubuntu/macOS/Windows
 latest-patch combinations plus exact `22.0.0` and `24.0.0` Ubuntu lower-bound
-jobs, all with repository checks and installed-package verification.
+jobs, all with repository checks, installed-package verification, and
+release-mode command verification.
 
 ## Environment gotchas
 

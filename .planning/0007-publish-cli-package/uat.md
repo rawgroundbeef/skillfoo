@@ -469,15 +469,15 @@ Expected:
   no-leak/control-safety, legacy-cache non-reuse, no-mutation, and exit
   `0`/`1`/`2`/`3` checks in the local implementation environment. The complete
   intended diff is committed and reviewable against `main`, the CI definition
-  assigns the same package check to all six Node/OS combinations, and no tag,
-  GitHub release, or npm publication exists.
+  assigns the installed-package and release-mode command checks to all six
+  Node/OS combinations, and no tag, GitHub release, or npm publication exists.
 
 ### Pull-request matrix readiness — required before human merge
 
 - After the release-readiness PR exists, all Node 22/24 by
-  Ubuntu/macOS/Windows jobs run both repository and installed-package checks and
-  pass, and exact lower-bound `22.0.0`/`24.0.0` Ubuntu jobs pass the same
-  repository and package checks. A failure returns the slice to implementation,
+  Ubuntu/macOS/Windows jobs run repository, installed-package, and release-mode
+  command checks and pass, and exact lower-bound `22.0.0`/`24.0.0` Ubuntu jobs
+  pass the same checks. A failure returns the slice to implementation,
   local verification, committed-range review, and PR update; it is not waived
   at the merge gate.
 

@@ -12,13 +12,16 @@ On the complete committed `release-readiness` branch:
 npm ci
 npm run check
 npm run test:package
+npm run test:release-modes
 git diff --check main...HEAD
 ```
 
 Inspect a real candidate pack in an owned temporary directory, then delete that disposable
 candidate. Confirm its identity, shasum, integrity, and exact file list. The PR must run
-`npm run check` and `npm run test:package` on the Node 22/24 Ubuntu, macOS, and Windows matrix
-plus exact Node `22.0.0` and `24.0.0` Ubuntu lower-bound jobs.
+`npm run check`, `npm run test:package`, and `npm run test:release-modes` on the Node 22/24
+Ubuntu, macOS, and Windows matrix plus exact Node `22.0.0` and `24.0.0` Ubuntu lower-bound
+jobs. The release-mode harness requires a clean committed checkout because it exercises the
+same commit-binding manifest path used after merge.
 
 Review and merge the PR with no `v1.0.0` tag, GitHub release, npm publication, publish token,
 or automatically firing publication workflow. Merge is not publication authorization.

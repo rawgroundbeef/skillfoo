@@ -88,6 +88,10 @@ function fail(message) {
 }
 
 function parseArguments(argv) {
+  if (argv.length === 1 && argv[0] === '--exercise-release-modes') {
+    return { kind: 'exercise-release-modes' };
+  }
+
   let tarball;
   let manifest;
   let checkManifest;
@@ -105,7 +109,7 @@ function parseArguments(argv) {
       checkManifest = value;
       index += 1;
     } else {
-      fail(`usage: verify-package.mjs [--tarball <absolute> --manifest <absolute>] | [--check-manifest <absolute>]`);
+      fail(`usage: verify-package.mjs [--tarball <absolute> --manifest <absolute>] | [--check-manifest <absolute>] | [--exercise-release-modes]`);
     }
   }
 
@@ -887,6 +891,97 @@ function exerciseManifestChecker(root, tarball) {
   assert.throws(() => assertManifestMatches(manifest), /release artifact (sha256|shasum|integrity|size) mismatch/u);
 }
 
+function verifierTemporaryEntries() {
+  return readdirSync(tmpdir())
+    .filter(
+      (name) =>
+        name.startsWith('skillfoo-package-verifier-') || name.startsWith('sf-g-'),
+    )
+    .sort();
+}
+
+function verificationLine() {
+  return `${PACKAGE_NAME}@${PACKAGE_VERSION} installed-package verification passed (${EXPECTED_PACKAGE_FILES.length} files, schema 2, exits 0/1/2/3, seven registry diagnostics)\n`;
+}
+
+function exerciseReleaseModeCommands() {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-release-mode-verifier-'));
+  try {
+    const workRoot = join(root, 'owned release mode workspace é');
+    mkdirSync(workRoot);
+    const env = isolatedEnvironment(workRoot);
+    const tarball = packTemporaryArtifact(workRoot, env);
+    const before = artifactHashes(tarball);
+    const tarballsBefore = listFiles(workRoot).filter((path) => path.endsWith('.tgz'));
+    const manifestPath = join(workRoot, 'release-manifest.json');
+    const verifier = fileURLToPath(import.meta.url);
+
+    const supplied = run(process.execPath, [
+      verifier,
+      '--tarball',
+      tarball,
+      '--manifest',
+      manifestPath,
+    ], { cwd: repositoryRoot, env });
+    assert.deepEqual(supplied, { status: 0, stdout: verificationLine(), stderr: '' });
+    assert.deepEqual(artifactHashes(tarball), before, 'supplied verification mutated the tarball');
+    assert.deepEqual(
+      listFiles(workRoot).filter((path) => path.endsWith('.tgz')),
+      tarballsBefore,
+      'supplied verification packed another tarball',
+    );
+
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    assert.deepEqual(manifest, releaseManifest(tarball));
+    const checked = run(process.execPath, [verifier, '--check-manifest', manifestPath], {
+      cwd: repositoryRoot,
+      env,
+    });
+    assert.deepEqual(checked, {
+      status: 0,
+      stdout: 'release manifest matches the retained tarball\n',
+      stderr: '',
+    });
+
+    const tamperedDirectory = join(workRoot, 'tampered artifact');
+    mkdirSync(tamperedDirectory);
+    const tamperedTarball = join(tamperedDirectory, basename(tarball));
+    copyFileSync(tarball, tamperedTarball);
+    appendFileSync(tamperedTarball, Buffer.from([0]));
+    const tamperedManifestPath = join(tamperedDirectory, 'release-manifest.json');
+    const tamperedManifest = {
+      ...manifest,
+      artifact: { ...manifest.artifact, absolutePath: tamperedTarball },
+    };
+    writeFileSync(tamperedManifestPath, `${JSON.stringify(tamperedManifest, null, 2)}\n`);
+    const tampered = run(
+      process.execPath,
+      [verifier, '--check-manifest', tamperedManifestPath],
+      { cwd: repositoryRoot, env },
+    );
+    assert.notEqual(tampered.status, 0);
+    assert.equal(tampered.stdout, '');
+    assert.match(tampered.stderr, /release artifact (sha256|shasum|integrity|size) mismatch/u);
+
+    const invalidDirectory = join(workRoot, 'invalid supplied artifact');
+    mkdirSync(invalidDirectory);
+    const invalidTarball = join(invalidDirectory, `${PACKAGE_NAME}-${PACKAGE_VERSION}.tgz`);
+    writeFileSync(invalidTarball, 'not a package tarball\n');
+    const temporaryEntriesBefore = verifierTemporaryEntries();
+    const invalid = run(process.execPath, [verifier, '--tarball', invalidTarball], {
+      cwd: repositoryRoot,
+      env,
+    });
+    assert.notEqual(invalid.status, 0);
+    assert.equal(invalid.stdout, '');
+    assert.deepEqual(verifierTemporaryEntries(), temporaryEntriesBefore);
+
+    process.stdout.write('release-mode command verification passed\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function exerciseTarEntryTypeGuard(root, tarball) {
   const archive = gunzipSync(readFileSync(tarball));
   archive[156] = '5'.charCodeAt(0);
@@ -1098,9 +1193,7 @@ function verify(mode) {
       writeFileSync(mode.manifest, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
     }
 
-    process.stdout.write(
-      `${PACKAGE_NAME}@${PACKAGE_VERSION} installed-package verification passed (${EXPECTED_PACKAGE_FILES.length} files, schema 2, exits 0/1/2/3, seven registry diagnostics)\n`,
-    );
+    process.stdout.write(verificationLine());
   } finally {
     try {
       rmSync(temporaryRoot, { recursive: true, force: true });
@@ -1113,7 +1206,9 @@ function verify(mode) {
 }
 
 const mode = parseArguments(process.argv.slice(2));
-if (mode.kind === 'check') {
+if (mode.kind === 'exercise-release-modes') {
+  exerciseReleaseModeCommands();
+} else if (mode.kind === 'check') {
   const manifest = JSON.parse(readFileSync(mode.manifest, 'utf8'));
   assertManifestMatches(manifest);
   process.stdout.write('release manifest matches the retained tarball\n');
