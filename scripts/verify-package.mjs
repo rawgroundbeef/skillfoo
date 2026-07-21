@@ -69,6 +69,12 @@ const EXPECTED_PACKAGE_FILES = [
   'package.json',
 ].sort();
 
+const RUNTIME_DEPENDENCIES = { yaml: '^2.5.0' };
+const DEVELOPMENT_DEPENDENCIES = {
+  '@types/node': '^22.20.1',
+  typescript: '~7.0.2',
+};
+
 const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -295,6 +301,25 @@ function assertPackageManifest(manifest) {
   assert.equal(manifest.homepage, HOMEPAGE);
   assert.deepEqual(manifest.bugs, { url: BUGS_URL });
   assert.deepEqual(manifest.publishConfig, { access: 'public', registry: REGISTRY });
+  assert.deepEqual(
+    manifest.dependencies,
+    RUNTIME_DEPENDENCIES,
+    'package dependencies must exactly match the release manifest',
+  );
+  assert.deepEqual(
+    manifest.devDependencies,
+    DEVELOPMENT_DEPENDENCIES,
+    'package devDependencies must exactly match the release manifest',
+  );
+  for (const key of [
+    'optionalDependencies',
+    'peerDependencies',
+    'peerDependenciesMeta',
+    'bundledDependencies',
+    'bundleDependencies',
+  ]) {
+    assert.equal(manifest[key], undefined, `package must not define ${key}`);
+  }
   for (const key of ['main', 'exports', 'types', 'typings']) assert.equal(manifest[key], undefined);
   for (const script of [
     'preinstall',
@@ -836,7 +861,48 @@ function writeTarChecksum(archive, headerOffset) {
   );
 }
 
-function exerciseInstallLifecycleManifestGuards(root, tarball) {
+function forgePackagedManifest(root, tarball, name, mutate) {
+  const archive = gunzipSync(readFileSync(tarball));
+  const manifestEntry = parseTarArchive(archive).find(
+    ({ name: entryName }) => entryName === 'package/package.json',
+  );
+  assert.ok(manifestEntry);
+  const manifest = JSON.parse(manifestEntry.contents.toString('utf8'));
+  mutate(manifest);
+
+  const contents = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
+  const capacity = Math.ceil(manifestEntry.size / 512) * 512;
+  assert.ok(contents.length <= capacity, 'forged manifest exceeds its tar entry space');
+  archive.fill(0, manifestEntry.dataOffset, manifestEntry.dataOffset + capacity);
+  contents.copy(archive, manifestEntry.dataOffset);
+  Buffer.from(`${contents.length.toString(8).padStart(11, '0')}\0`, 'ascii').copy(
+    archive,
+    manifestEntry.headerOffset + 124,
+  );
+  writeTarChecksum(archive, manifestEntry.headerOffset);
+
+  const forgedTarball = join(root, name);
+  writeFileSync(forgedTarball, gzipSync(archive));
+  return forgedTarball;
+}
+
+function markerCommand(marker) {
+  const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
+  return (
+    `node -e "require('node:fs').writeFileSync(` +
+    `Buffer.from('${encodedMarker}','base64'),'ran')"`
+  );
+}
+
+function assertRejectedBeforeInstall(root, tarball, env, expected, marker) {
+  assert.throws(() => {
+    readPackagedManifest(tarball);
+    installArtifact(root, tarball, env);
+  }, expected);
+  assert.equal(existsSync(marker), false, 'forbidden install code ran before rejection');
+}
+
+function exerciseInstallLifecycleManifestGuards(root, tarball, env) {
   for (const script of [
     'preinstall',
     'install',
@@ -846,40 +912,53 @@ function exerciseInstallLifecycleManifestGuards(root, tarball) {
     'prepare',
     'postprepare',
   ]) {
-    const archive = gunzipSync(readFileSync(tarball));
-    const manifestEntry = parseTarArchive(archive).find(
-      ({ name }) => name === 'package/package.json',
-    );
-    assert.ok(manifestEntry);
-    const manifest = JSON.parse(manifestEntry.contents.toString('utf8'));
     const marker = join(root, `forbidden ${script} marker`);
-    const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
-    manifest.scripts = {
-      ...manifest.scripts,
-      [script]:
-        `node -e "require('node:fs').writeFileSync(` +
-        `Buffer.from('${encodedMarker}','base64'),'ran')"`,
-    };
-    const contents = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
-    const capacity = Math.ceil(manifestEntry.size / 512) * 512;
-    assert.ok(contents.length <= capacity, 'lifecycle regression manifest exceeds tar entry space');
-
-    archive.fill(0, manifestEntry.dataOffset, manifestEntry.dataOffset + capacity);
-    contents.copy(archive, manifestEntry.dataOffset);
-    Buffer.from(`${contents.length.toString(8).padStart(11, '0')}\0`, 'ascii').copy(
-      archive,
-      manifestEntry.headerOffset + 124,
+    const forbiddenTarball = forgePackagedManifest(
+      root,
+      tarball,
+      `forbidden ${script} hook.tgz`,
+      (manifest) => {
+        manifest.scripts = { ...manifest.scripts, [script]: markerCommand(marker) };
+      },
     );
-    writeTarChecksum(archive, manifestEntry.headerOffset);
-
-    const forbiddenTarball = join(root, `forbidden ${script} hook.tgz`);
-    writeFileSync(forbiddenTarball, gzipSync(archive));
-    assert.throws(
-      () => readPackagedManifest(forbiddenTarball),
+    assertRejectedBeforeInstall(
+      join(root, `forbidden ${script} install`),
+      forbiddenTarball,
+      env,
       new RegExp(`package must not define ${script}`, 'u'),
+      marker,
     );
-    assert.equal(existsSync(marker), false, `forbidden ${script} hook ran before rejection`);
   }
+}
+
+function exerciseDependencyManifestGuard(root, tarball, env) {
+  const dependency = join(root, 'forbidden dependency package');
+  const marker = join(root, 'forbidden dependency marker');
+  mkdirSync(dependency);
+  writeFileSync(
+    join(dependency, 'package.json'),
+    `${JSON.stringify({
+      name: 'yaml',
+      version: '2.5.0',
+      scripts: { preinstall: markerCommand(marker) },
+    })}\n`,
+  );
+  const forbiddenTarball = forgePackagedManifest(
+    root,
+    tarball,
+    'forbidden dependency hook.tgz',
+    (manifest) => {
+      manifest.dependencies = { yaml: pathToFileURL(dependency).href };
+    },
+  );
+
+  assertRejectedBeforeInstall(
+    join(root, 'forbidden dependency install'),
+    forbiddenTarball,
+    env,
+    /package dependencies must exactly match the release manifest/u,
+    marker,
+  );
 }
 
 function verify(mode) {
@@ -913,7 +992,8 @@ function verify(mode) {
     }
     assert.deepEqual([...observedRegistryLines].sort(), [...REGISTRY_LINES].sort());
     exerciseTarEntryTypeGuard(workRoot, tarball);
-    exerciseInstallLifecycleManifestGuards(workRoot, tarball);
+    exerciseInstallLifecycleManifestGuards(workRoot, tarball, env);
+    exerciseDependencyManifestGuard(workRoot, tarball, env);
     exerciseManifestChecker(workRoot, tarball);
 
     assert.deepEqual(artifactHashes(tarball), before, 'package verification mutated the tarball');
