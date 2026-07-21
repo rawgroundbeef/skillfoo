@@ -231,6 +231,6 @@ test('resolves and catalogs a Git registry once during initialization', async (c
     },
   );
 
-  assert.equal(progress.filter((message) => message.includes('cloning registry')).length, 1);
-  assert.equal(progress.some((message) => message.includes('updating registry')), false);
+  assert.equal(progress.filter((message) => message.includes('cloning configured Git registry')).length, 1);
+  assert.equal(progress.some((message) => message.includes('updating configured Git registry')), false);
 });

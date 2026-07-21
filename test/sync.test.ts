@@ -8,6 +8,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -249,7 +250,7 @@ test('foreign adapter content blocks removal before the emitted directory is tou
   const emittedBytes = readFileSync(join(emitted, 'SKILL.md'));
   const previousAgents = readFileSync(join(state.consumer, 'AGENTS.md'));
   const previousEntry = readLock(state.consumer).skills.beta;
-  rmSync(adapter);
+  unlinkSync(adapter);
   writeFileSync(adapter, 'foreign adapter\n');
   configure(state.consumer, []);
   state.output.length = 0;

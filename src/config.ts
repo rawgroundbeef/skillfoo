@@ -10,10 +10,12 @@ import {
   win32,
 } from 'node:path';
 import { isMap, isScalar, parseDocument, stringify } from 'yaml';
+import { validateRegistrySource } from './registry-source.js';
 import { isSafeSkillName, normalizeDesiredNames } from './skill-name.js';
 
 export const CONFIG_NAME = '.skillfoo.yml';
 export const DEFAULT_EMIT = '.agents/skills';
+export const CONFIG_PARSE_DIAGNOSTIC = `${CONFIG_NAME} contains invalid YAML; verify its syntax`;
 
 export interface SkillfooConfig {
   registry: string;
@@ -134,6 +136,7 @@ export function renderConfig(config: NewSkillfooConfig): string {
   if (config.registry.length === 0) {
     throw new Error(`${CONFIG_NAME} "registry:" must be a non-empty registry source`);
   }
+  validateRegistrySource(config.registry);
 
   const emit = config.emit ?? DEFAULT_EMIT;
   const skills = config.skills === null ? null : normalizeDesiredNames(config.skills);
@@ -159,9 +162,13 @@ export function createConfigExclusive(dir: string, config: NewSkillfooConfig): s
 }
 
 export function parseConfigContents(dir: string, contents: string): SkillfooConfig {
-  const document = parseDocument(contents);
-  const syntaxError = document.errors[0];
-  if (syntaxError !== undefined) throw new Error(syntaxError.message);
+  let document: ReturnType<typeof parseDocument>;
+  try {
+    document = parseDocument(contents);
+    if (document.errors.length > 0) throw new Error(CONFIG_PARSE_DIAGNOSTIC);
+  } catch {
+    throw new Error(CONFIG_PARSE_DIAGNOSTIC);
+  }
 
   const overrides: Record<string, 'local'> = {};
   const overrideNode = document.get('overrides', true);
@@ -188,12 +195,18 @@ export function parseConfigContents(dir: string, contents: string): SkillfooConf
     }
   }
 
-  const parsed: unknown = document.toJS();
+  let parsed: unknown;
+  try {
+    parsed = document.toJS();
+  } catch {
+    throw new Error(CONFIG_PARSE_DIAGNOSTIC);
+  }
   const cfg = isRecord(parsed) ? parsed : {};
 
   if (typeof cfg.registry !== 'string' || !cfg.registry) {
     throw new Error(`${CONFIG_NAME} is missing "registry:" (path to your skills repo)`);
   }
+  validateRegistrySource(cfg.registry);
 
   if (
     cfg.skills != null &&

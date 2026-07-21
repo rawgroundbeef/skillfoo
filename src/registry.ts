@@ -1,40 +1,36 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-
-const GIT_PREFIXES = [
-  'http://',
-  'https://',
-  'git@',
-  'ssh://',
-  'file://',
-  'github.com/',
-  'gitlab.com/',
-  'bitbucket.org/',
-];
+import {
+  REGISTRY_DIAGNOSTICS,
+  isExplicitLocalRegistryPath,
+  isRemoteRegistrySource,
+  normalizeRegistryCloneUrl,
+  registryFailure,
+  validateRegistrySource,
+} from './registry-source.js';
 
 export function isGitRegistry(spec: string): boolean {
-  return GIT_PREFIXES.some((prefix) => spec.startsWith(prefix)) || spec.endsWith('.git');
+  return isRemoteRegistrySource(spec);
 }
 
-function toCloneUrl(spec: string): string {
-  if (/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(spec)) return spec;
-  return `https://${spec.replace(/\.git$/, '')}.git`;
+export function normalizeCloneUrl(spec: string): string {
+  return normalizeRegistryCloneUrl(spec);
 }
 
-function cacheDirFor(url: string, cacheRoot: string): string {
-  const slug = url
-    .replace(/^\w+:\/\//, '')
-    .replace(/^git@/, '')
-    .replace(/[:]/g, '-')
-    .replace(/\.git$/, '')
-    .replace(/[^\w.-]+/g, '-');
-  return join(cacheRoot, slug);
+export function cacheDirFor(url: string, cacheRoot: string): string {
+  const digest = createHash('sha256').update(url, 'utf8').digest('hex');
+  return join(cacheRoot, digest);
 }
 
-function git(args: string[], cwd: string): void {
-  execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
 
 function freshClone(url: string, dir: string): void {
@@ -43,13 +39,18 @@ function freshClone(url: string, dir: string): void {
   git(['clone', '--depth', '1', url, dir], dirname(dir));
 }
 
-function registryErrorMessage(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'stderr' in error) {
-    const stderr = error.stderr;
-    if (Buffer.isBuffer(stderr)) return stderr.toString().trim();
-    if (stderr != null) return String(stderr).trim();
+function cachedOriginMatches(dir: string, url: string): boolean {
+  try {
+    const output = git(['remote', 'get-url', 'origin'], dir).replace(/\r?\n$/u, '');
+    return normalizeCloneUrl(output) === url;
+  } catch {
+    return false;
   }
-  return error instanceof Error ? error.message : String(error);
+}
+
+function cloneAndVerify(url: string, dir: string): void {
+  freshClone(url, dir);
+  if (!cachedOriginMatches(dir, url)) throw registryFailure(REGISTRY_DIAGNOSTICS.fetchFailure);
 }
 
 export interface RegistryOptions {
@@ -64,28 +65,44 @@ export interface RegistryCatalog {
 }
 
 export function resolveRegistry(spec: string, cwd: string, options: RegistryOptions = {}): string {
-  if (!isGitRegistry(spec)) return resolve(cwd, spec);
+  validateRegistrySource(spec);
+  if (isExplicitLocalRegistryPath(spec) || !isGitRegistry(spec)) return resolve(cwd, spec);
 
-  const url = toCloneUrl(spec);
+  const url = normalizeCloneUrl(spec);
   const cacheRoot = options.cacheRoot ?? join(homedir(), '.skillfoo', 'registries');
   const dir = cacheDirFor(url, cacheRoot);
-  const report = options.reporter ?? ((message: string) => console.log(message));
+  const report = options.reporter ?? ((message: string) => console.error(message));
 
+  if (!existsSync(dir)) {
+    report(REGISTRY_DIAGNOSTICS.cloning);
+    try {
+      cloneAndVerify(url, dir);
+    } catch {
+      throw registryFailure(REGISTRY_DIAGNOSTICS.fetchFailure);
+    }
+    return dir;
+  }
+
+  if (!existsSync(join(dir, '.git')) || !cachedOriginMatches(dir, url)) {
+    report(REGISTRY_DIAGNOSTICS.recloning);
+    try {
+      cloneAndVerify(url, dir);
+    } catch {
+      throw registryFailure(REGISTRY_DIAGNOSTICS.fetchFailure);
+    }
+    return dir;
+  }
+
+  report(REGISTRY_DIAGNOSTICS.updating);
   try {
-    if (existsSync(join(dir, '.git'))) {
-      report(`  updating registry ${url}`);
       git(['fetch', '--depth', '1', 'origin'], dir);
       git(['reset', '--hard', '@{upstream}'], dir);
-    } else {
-      report(`  cloning registry ${url}`);
-      freshClone(url, dir);
-    }
   } catch {
+    report(REGISTRY_DIAGNOSTICS.recloning);
     try {
-      report(`  re-cloning registry ${url}`);
-      freshClone(url, dir);
-    } catch (error) {
-      throw new Error(`could not fetch registry ${url}: ${registryErrorMessage(error)}`);
+      cloneAndVerify(url, dir);
+    } catch {
+      throw registryFailure(REGISTRY_DIAGNOSTICS.fetchFailure);
     }
   }
 
@@ -107,11 +124,21 @@ export function resolveRegistryCatalog(
 ): RegistryCatalog {
   const directory = resolveRegistry(spec, cwd, options);
   if (!existsSync(directory)) {
-    throw new Error(`registry not found: ${directory} (registry: ${spec})`);
+    throw registryFailure(REGISTRY_DIAGNOSTICS.localMissing);
+  }
+  let skills: string[];
+  try {
+    skills = listRegistrySkills(directory);
+  } catch {
+    throw registryFailure(
+      isGitRegistry(spec) && !isExplicitLocalRegistryPath(spec)
+        ? REGISTRY_DIAGNOSTICS.fetchFailure
+        : REGISTRY_DIAGNOSTICS.localMissing,
+    );
   }
   return {
     spec,
     directory,
-    skills: listRegistrySkills(directory),
+    skills,
   };
 }

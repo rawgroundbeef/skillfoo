@@ -6,18 +6,24 @@ skillfoo pulls skills from a **skills registry** into any project as committed f
 agent can read. The registry is the default authority for Managed skills; a project can
 explicitly keep a repository version authoritative as a local Override.
 
-> Early and evolving. Today it provides local project initialization, safe reconciliation,
-> read-only status, and targeted resolution of locally edited Managed skills. GitHub-App PR
-> fan-out remains on the roadmap.
+> The CLI is preparing its first public package. Today it provides local project
+> initialization, safe reconciliation, consumer-repository read-only status, and targeted
+> resolution of locally edited Managed skills. GitHub-App PR fan-out remains on the roadmap.
 
 ## Install
 
-Not yet on npm. From source:
+The intended first public release is `skillfoo@1.0.0`. After the public registry serves it,
+install and invoke that exact project-local version with:
 
 ```sh
-git clone https://github.com/rawgroundbeef/skillfoo
-cd skillfoo && npm install && npm link   # gives you a global `skillfoo`
+npm install --save-exact skillfoo@1.0.0
+npm exec -- skillfoo --version
 ```
+
+This release-readiness change does not itself publish the package. Do not substitute a branch,
+global link, or source checkout for package verification. The examples below use `skillfoo`
+as the command name; a local installation can invoke it through `npm exec -- skillfoo` or a
+package script.
 
 ## Quickstart
 
@@ -56,12 +62,23 @@ registry: github.com/your-org/skills   # a local path or a git URL
 #   slice: local
 ```
 
+A bare source whose path ends in `.git` is a remote HTTPS shorthand. Prefix a
+relative local `.git` directory with `./` or `../` (for example,
+`./skills-registry.git`) to make the local intent explicit. Absolute POSIX,
+Windows drive, and UNC paths are also local.
+
 `emit` must be a non-empty relative path contained by the project. Existing path ancestors
 must be real directories, not symlinks, junctions, files, or special entries.
 
 `overrides` must map a selected, already Managed skill name to the exact value `local`. An
 Override remains Managed, keeps its prior source baseline in `.skillfoo.lock`, and accepts
 later safe repository edits until the policy is explicitly reversed.
+
+Configure only a registry whose instruction authors you trust. Explicit `sync` copies its
+skill files without semantically sandboxing or approving their contents, and downstream
+agents may follow those instructions. Lockfile hashes identify reconciliation content; they
+do not authenticate the registry author. Remote registries should use Git credential helpers,
+SSH keys, or other out-of-band authentication rather than credentials embedded in a URL.
 
 ## Reconciliation
 
@@ -96,6 +113,12 @@ Status exits `0` when converged, `2` when ordinary sync can safely apply all pen
 `3` when at least one conflict needs attention, and `1` for usage or operational failures.
 Successful JSON output uses schema version 2 and writes only the JSON document to stdout;
 registry progress and diagnostics use stderr.
+
+Status never writes the consumer repository. A local-path registry is read without network
+or skillfoo cache effects. A Git-backed registry may access the network and create, fetch,
+reset, or safely replace skillfoo's external registry cache. See the complete
+[`status --json` schema 2 contract](docs/status-json-v2.md) for records, ordering, streams,
+exit statuses, and compatibility rules.
 
 ### Resolve one local-edit conflict
 

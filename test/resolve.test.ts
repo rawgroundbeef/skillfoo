@@ -12,6 +12,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -128,7 +129,7 @@ test('takes the registry for one conflict and leaves another conflict byte-for-b
   editLocal(state, 'beta');
   writeFileSync(join(state.consumer, '.agents', 'skills', 'alpha', 'local-only.txt'), 'discard\n');
   await sync(state.consumer, { output: () => undefined });
-  rmSync(join(state.consumer, '.claude', 'skills', 'alpha'));
+  unlinkSync(join(state.consumer, '.claude', 'skills', 'alpha'));
 
   const agentsBefore = readFileSync(join(state.consumer, 'AGENTS.md'), 'utf8');
   const betaBefore = {
@@ -192,7 +193,7 @@ test('preserves a foreign target adapter as a residual conflict', async (context
   editLocal(state, 'alpha');
   await sync(state.consumer, { output: () => undefined });
   const adapter = join(state.consumer, '.claude', 'skills', 'alpha');
-  rmSync(adapter);
+  unlinkSync(adapter);
   writeFileSync(adapter, 'foreign adapter\n');
 
   const result = resolveSkill(state.consumer, 'alpha');
@@ -575,7 +576,7 @@ test('rollback preserves foreign content that replaces its created adapter', asy
   editLocal(state, 'alpha');
   await sync(state.consumer, { output: () => undefined });
   const adapter = join(state.consumer, '.claude', 'skills', 'alpha');
-  rmSync(adapter);
+  unlinkSync(adapter);
   const localBefore = readFileSync(
     join(state.consumer, '.agents', 'skills', 'alpha', 'SKILL.md'),
   );
@@ -588,7 +589,7 @@ test('rollback preserves foreign content that replaces its created adapter', asy
       hooks: {
         afterStep: (step) => {
           if (step !== 'adapter_reconciled') return;
-          rmSync(adapter);
+          unlinkSync(adapter);
           writeFileSync(adapter, 'concurrent foreign adapter\n');
           throw new Error('injected failure after foreign adapter replacement');
         },
@@ -615,7 +616,7 @@ test('keeps one local Conflict as a live Override and reverses it with take-regi
   editLocal(state, 'alpha', 'Alpha customized in this repository. More detail.');
   const localOnly = join(state.consumer, '.agents', 'skills', 'alpha', 'local-only.txt');
   writeFileSync(localOnly, 'keep local\n');
-  rmSync(join(state.consumer, '.claude', 'skills', 'alpha'));
+  unlinkSync(join(state.consumer, '.claude', 'skills', 'alpha'));
   writeFileSync(
     join(state.consumer, '.skillfoo.yml'),
     '# consumer policy\nregistry: ../registry # local source\nskills: [alpha, beta]\n' +
@@ -722,7 +723,7 @@ test('keep-local records policy while preserving a foreign adapter as residual c
   await converge(state);
   editLocal(state, 'alpha');
   const adapter = join(state.consumer, '.claude', 'skills', 'alpha');
-  rmSync(adapter);
+  unlinkSync(adapter);
   writeFileSync(adapter, 'foreign adapter\n');
 
   const result = resolveSkill(state.consumer, 'alpha', { direction: 'keep_local' });

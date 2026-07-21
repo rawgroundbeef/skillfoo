@@ -1,22 +1,54 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { planReconciliation } from '../src/plan.js';
-import { listRegistrySkills, resolveRegistryCatalog } from '../src/registry.js';
+import {
+  cacheDirFor,
+  listRegistrySkills,
+  normalizeCloneUrl,
+  resolveRegistryCatalog,
+} from '../src/registry.js';
+import { REGISTRY_DIAGNOSTICS } from '../src/registry-source.js';
 
-function git(cwd: string, ...args: string[]): void {
-  execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function snapshotTree(root: string): string[] {
+  const entries: string[] = [];
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory).sort()) {
+      const path = join(directory, name);
+      const key = relative(root, path).split(sep).join('/');
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) entries.push(`link ${key} -> ${readlinkSync(path)}`);
+      else if (stat.isDirectory()) {
+        entries.push(`dir ${key}`);
+        visit(path);
+      } else if (stat.isFile()) {
+        entries.push(`file ${key} ${readFileSync(path).toString('base64')}`);
+      } else entries.push(`special ${key}`);
+    }
+  };
+  visit(root);
+  return entries;
 }
 
 function writeSkill(registry: string, description: string): void {
@@ -27,6 +59,41 @@ function writeSkill(registry: string, description: string): void {
     `---\nname: alpha\ndescription: ${description}\n---\n\n# Alpha\n`,
   );
 }
+
+test('normalizes validated hosted shorthands to their exact clone URL', () => {
+  assert.equal(
+    normalizeCloneUrl('github.com/example/skills'),
+    'https://github.com/example/skills.git',
+  );
+  assert.equal(
+    normalizeCloneUrl('gitlab.com/example/skills.git'),
+    'https://gitlab.com/example/skills.git',
+  );
+  assert.equal(
+    normalizeCloneUrl('example.com/example/skills.git'),
+    'https://example.com/example/skills.git',
+  );
+  assert.throws(
+    () => normalizeCloneUrl('github.com/example/skills?token=sensitive-value'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('user:sensitive-value@example.com/example/skills.git'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('example.com/example/skills.git?token=sensitive-value'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('example.com/example/skills.git#sensitive-value'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('example.com/example/skills?token=sensitive-value.git'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+});
 
 test('catalogs only skill directories in deterministic name order', () => {
   const root = mkdtempSync(join(tmpdir(), 'skillfoo-registry-catalog-'));
@@ -44,6 +111,22 @@ test('catalogs only skill directories in deterministic name order', () => {
       spec: '.',
       directory: root,
       skills: ['alpha', 'beta'],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('treats explicit local paths ending in .git as filesystem registries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-local-dot-git-'));
+  const registry = join(root, 'registry.git');
+  try {
+    mkdirSync(registry);
+    writeNamedSkill(registry, 'local-source');
+    assert.deepEqual(resolveRegistryCatalog('./registry.git', root), {
+      spec: './registry.git',
+      directory: registry,
+      skills: ['local-source'],
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -82,7 +165,7 @@ test('refreshes a Git registry only through an isolated private cache', () => {
     });
     const firstHash = first.nextLock.skills.alpha?.hash;
     assert.ok(firstHash);
-    assert.ok(progress.some((message) => message.includes('cloning registry')));
+    assert.deepEqual([...progress], [REGISTRY_DIAGNOSTICS.cloning]);
     assert.deepEqual(readdirSync(consumer), consumerBefore.entries);
     assert.deepEqual(readFileSync(join(consumer, '.skillfoo.yml')), consumerBefore.config);
 
@@ -95,7 +178,7 @@ test('refreshes a Git registry only through an isolated private cache', () => {
       registryReporter: (message) => progress.push(message),
     });
     assert.notEqual(second.nextLock.skills.alpha?.hash, firstHash);
-    assert.ok(progress.some((message) => message.includes('updating registry')));
+    assert.deepEqual([...progress], [REGISTRY_DIAGNOSTICS.updating]);
     assert.deepEqual(readdirSync(consumer), consumerBefore.entries);
     assert.deepEqual(readFileSync(join(consumer, '.skillfoo.yml')), consumerBefore.config);
 
@@ -106,10 +189,102 @@ test('refreshes a Git registry only through an isolated private cache', () => {
           registryCacheRoot: cacheRoot,
           registryReporter: () => undefined,
         }),
-      /could not fetch registry/,
+      /could not fetch configured Git registry/,
     );
     assert.deepEqual(readdirSync(consumer), consumerBefore.entries);
     assert.deepEqual(readFileSync(join(consumer, '.skillfoo.yml')), consumerBefore.config);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function writeNamedSkill(registry: string, name: string): void {
+  const skill = join(registry, name);
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(
+    join(skill, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: ${name} guidance.\n---\n\n# ${name}\n`,
+  );
+}
+
+function initializeRegistry(registry: string, name: string): void {
+  mkdirSync(registry, { recursive: true });
+  git(registry, 'init');
+  git(registry, 'config', 'user.email', 'tests@skillfoo.local');
+  git(registry, 'config', 'user.name', 'Skillfoo Tests');
+  writeNamedSkill(registry, name);
+  git(registry, 'add', '.');
+  git(registry, 'commit', '-m', name);
+}
+
+test('separates colliding legacy slugs and re-clones a retargeted hashed cache', () => {
+  const root = mkdtempSync(join(tmpdir(), 'skillfoo-cache-identity-'));
+  const firstRegistry = join(root, 'a-b');
+  const secondRegistry = join(root, 'a', 'b');
+  const legacyRegistry = join(root, 'legacy');
+  const cacheRoot = join(root, 'cache');
+  const progress: string[] = [];
+
+  try {
+    initializeRegistry(firstRegistry, 'first-source');
+    initializeRegistry(secondRegistry, 'second-source');
+    initializeRegistry(legacyRegistry, 'legacy-source');
+
+    const firstUrl = pathToFileURL(firstRegistry).href;
+    const secondUrl = pathToFileURL(secondRegistry).href;
+    const oldSlug = firstUrl
+      .replace(/^\w+:\/\//u, '')
+      .replace(/^git@/u, '')
+      .replace(/[:]/gu, '-')
+      .replace(/\.git$/u, '')
+      .replace(/[^\w.-]+/gu, '-');
+    const secondOldSlug = secondUrl
+      .replace(/^\w+:\/\//u, '')
+      .replace(/^git@/u, '')
+      .replace(/[:]/gu, '-')
+      .replace(/\.git$/u, '')
+      .replace(/[^\w.-]+/gu, '-');
+    assert.equal(oldSlug, secondOldSlug);
+
+    const legacyDir = join(cacheRoot, oldSlug);
+    mkdirSync(cacheRoot, { recursive: true });
+    git(cacheRoot, 'clone', pathToFileURL(legacyRegistry).href, legacyDir);
+    const legacyHeadBefore = git(legacyDir, 'rev-parse', 'HEAD');
+
+    const first = resolveRegistryCatalog(firstUrl, root, {
+      cacheRoot,
+      reporter: (message) => progress.push(message),
+    });
+    const second = resolveRegistryCatalog(secondUrl, root, {
+      cacheRoot,
+      reporter: (message) => progress.push(message),
+    });
+    assert.deepEqual(first.skills, ['first-source']);
+    assert.deepEqual(second.skills, ['second-source']);
+    assert.deepEqual([...progress], [
+      REGISTRY_DIAGNOSTICS.cloning,
+      REGISTRY_DIAGNOSTICS.cloning,
+    ]);
+
+    const firstCache = cacheDirFor(normalizeCloneUrl(firstUrl), cacheRoot);
+    const secondCache = cacheDirFor(normalizeCloneUrl(secondUrl), cacheRoot);
+    assert.notEqual(firstCache, secondCache);
+    assert.match(firstCache.slice(cacheRoot.length + 1), /^[a-f0-9]{64}$/u);
+    assert.match(secondCache.slice(cacheRoot.length + 1), /^[a-f0-9]{64}$/u);
+    const firstCacheBeforeRetarget = snapshotTree(firstCache);
+
+    git(secondCache, 'remote', 'set-url', 'origin', firstUrl);
+    progress.length = 0;
+    const recovered = resolveRegistryCatalog(secondUrl, root, {
+      cacheRoot,
+      reporter: (message) => progress.push(message),
+    });
+    assert.deepEqual(recovered.skills, ['second-source']);
+    assert.deepEqual([...progress], [REGISTRY_DIAGNOSTICS.recloning]);
+    assert.equal(git(secondCache, 'remote', 'get-url', 'origin').trim(), secondUrl);
+    assert.deepEqual(snapshotTree(firstCache), firstCacheBeforeRetarget);
+    assert.equal(git(legacyDir, 'rev-parse', 'HEAD'), legacyHeadBefore);
+    assert.deepEqual(listRegistrySkills(legacyDir), ['legacy-source']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
