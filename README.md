@@ -62,6 +62,11 @@ registry: github.com/your-org/skills   # a local path or a git URL
 #   slice: local
 ```
 
+A bare source whose path ends in `.git` is a remote HTTPS shorthand. Prefix a
+relative local `.git` directory with `./` or `../` (for example,
+`./skills-registry.git`) to make the local intent explicit. Absolute POSIX,
+Windows drive, and UNC paths are also local.
+
 `emit` must be a non-empty relative path contained by the project. Existing path ancestors
 must be real directories, not symlinks, junctions, files, or special entries.
 

@@ -62,7 +62,8 @@ Usage:
   skillfoo init <registry> [--skill <name> ... | --all] [--emit <path>]
 
 Arguments:
-  <registry>      Local path or Git-backed registry source
+  <registry>      Local path or Git-backed source
+                  Prefix relative local .git paths with ./ or ../
 
 Options:
   --skill <name>  Select a desired skill; repeat to select more than one

@@ -211,6 +211,9 @@ registry access:
   be classified, rendered, accessed, or used in a cache path;
 - keep credential-free shorthands, `git@host:path`, SSH URLs, HTTP(S) URLs,
   file URLs, and local filesystem paths working; and
+- preserve the established disambiguation where a bare source whose path ends
+  in `.git` is a remote HTTPS shorthand, while a relative local `.git` path uses
+  an explicit `./` or `../` prefix (absolute, drive, and UNC paths remain local);
 - render an actionable error that never repeats the rejected value or any
   userinfo/query/fragment component.
 

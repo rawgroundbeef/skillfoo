@@ -98,8 +98,9 @@ pull request or the slice workflow reaches that authorized step.
   SSH usernames and credential-free local/remote Git forms. Validate every
   non-local Git source as the exact URL passed to Git after semantic expansion,
   including hosted/generic shorthands and `git@host:path`, and reject unsupported
-  scheme-like sources. Never echo the rejected URL or sensitive components; use
-  out-of-band Git authentication.
+  scheme-like sources. Preserve bare path-ending `.git` values as remote HTTPS
+  shorthands; relative local `.git` paths require `./` or `../`. Never echo the
+  rejected URL or sensitive components; use out-of-band Git authentication.
 - Treat every registry source and Git diagnostic as untrusted terminal data.
   Reject control characters before classification or output. Never relay raw
   Git/helper/remote stderr or interpolate registry/external text into progress
