@@ -288,6 +288,9 @@ function assertPackageManifest(manifest) {
     'install',
     'postinstall',
     'prepublish',
+    'preprepare',
+    'prepare',
+    'postprepare',
     'prepublishOnly',
     'publish',
     'postpublish',
@@ -821,40 +824,50 @@ function writeTarChecksum(archive, headerOffset) {
   );
 }
 
-function exercisePreinstallManifestGuard(root, tarball) {
-  const archive = gunzipSync(readFileSync(tarball));
-  const manifestEntry = parseTarArchive(archive).find(
-    ({ name }) => name === 'package/package.json',
-  );
-  assert.ok(manifestEntry);
-  const manifest = JSON.parse(manifestEntry.contents.toString('utf8'));
-  const marker = join(root, 'forbidden lifecycle marker');
-  const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
-  manifest.scripts = {
-    ...manifest.scripts,
-    preinstall:
-      `node -e "require('node:fs').writeFileSync(` +
-      `Buffer.from('${encodedMarker}','base64'),'ran')"`,
-  };
-  const contents = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
-  const capacity = Math.ceil(manifestEntry.size / 512) * 512;
-  assert.ok(contents.length <= capacity, 'lifecycle regression manifest exceeds tar entry space');
+function exerciseInstallLifecycleManifestGuards(root, tarball) {
+  for (const script of [
+    'preinstall',
+    'install',
+    'postinstall',
+    'prepublish',
+    'preprepare',
+    'prepare',
+    'postprepare',
+  ]) {
+    const archive = gunzipSync(readFileSync(tarball));
+    const manifestEntry = parseTarArchive(archive).find(
+      ({ name }) => name === 'package/package.json',
+    );
+    assert.ok(manifestEntry);
+    const manifest = JSON.parse(manifestEntry.contents.toString('utf8'));
+    const marker = join(root, `forbidden ${script} marker`);
+    const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
+    manifest.scripts = {
+      ...manifest.scripts,
+      [script]:
+        `node -e "require('node:fs').writeFileSync(` +
+        `Buffer.from('${encodedMarker}','base64'),'ran')"`,
+    };
+    const contents = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
+    const capacity = Math.ceil(manifestEntry.size / 512) * 512;
+    assert.ok(contents.length <= capacity, 'lifecycle regression manifest exceeds tar entry space');
 
-  archive.fill(0, manifestEntry.dataOffset, manifestEntry.dataOffset + capacity);
-  contents.copy(archive, manifestEntry.dataOffset);
-  Buffer.from(`${contents.length.toString(8).padStart(11, '0')}\0`, 'ascii').copy(
-    archive,
-    manifestEntry.headerOffset + 124,
-  );
-  writeTarChecksum(archive, manifestEntry.headerOffset);
+    archive.fill(0, manifestEntry.dataOffset, manifestEntry.dataOffset + capacity);
+    contents.copy(archive, manifestEntry.dataOffset);
+    Buffer.from(`${contents.length.toString(8).padStart(11, '0')}\0`, 'ascii').copy(
+      archive,
+      manifestEntry.headerOffset + 124,
+    );
+    writeTarChecksum(archive, manifestEntry.headerOffset);
 
-  const forbiddenTarball = join(root, 'forbidden lifecycle hook.tgz');
-  writeFileSync(forbiddenTarball, gzipSync(archive));
-  assert.throws(
-    () => readPackagedManifest(forbiddenTarball),
-    /package must not define preinstall/u,
-  );
-  assert.equal(existsSync(marker), false, 'forbidden lifecycle hook ran before rejection');
+    const forbiddenTarball = join(root, `forbidden ${script} hook.tgz`);
+    writeFileSync(forbiddenTarball, gzipSync(archive));
+    assert.throws(
+      () => readPackagedManifest(forbiddenTarball),
+      new RegExp(`package must not define ${script}`, 'u'),
+    );
+    assert.equal(existsSync(marker), false, `forbidden ${script} hook ran before rejection`);
+  }
 }
 
 function verify(mode) {
@@ -888,7 +901,7 @@ function verify(mode) {
     }
     assert.deepEqual([...observedRegistryLines].sort(), [...REGISTRY_LINES].sort());
     exerciseTarEntryTypeGuard(workRoot, tarball);
-    exercisePreinstallManifestGuard(workRoot, tarball);
+    exerciseInstallLifecycleManifestGuards(workRoot, tarball);
     exerciseManifestChecker(workRoot, tarball);
 
     assert.deepEqual(artifactHashes(tarball), before, 'package verification mutated the tarball');
