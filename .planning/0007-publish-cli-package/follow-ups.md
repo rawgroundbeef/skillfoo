@@ -28,6 +28,10 @@
 
 ## Cleanup / Refactor Notes
 
+- **2026-07-21 · Share installed-package fixture paths.** The package verifier's
+  lifecycle marker assertions reconstruct the installed consumer/package paths
+  owned by `installArtifact`. Extract shared path helpers if either fixture
+  layout changes so rejection tests cannot inspect a stale location.
 - **2026-07-21 · Legacy registry-cache cleanup.** D022 intentionally stops
   reading lossy slug-only cache directories and creates full-digest identities
   instead. Do not broadly delete unknown cache state during the 1.0 migration;
