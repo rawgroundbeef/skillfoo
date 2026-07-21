@@ -20,7 +20,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const PACKAGE_NAME = 'skillfoo';
@@ -121,6 +121,7 @@ function run(command, args, options = {}) {
     input: options.input,
     maxBuffer: 16 * 1024 * 1024,
     shell: false,
+    windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
     windowsHide: true,
   });
   if (result.error !== undefined) throw result.error;
@@ -181,10 +182,26 @@ function tarEntries(path) {
   const archive = gunzipSync(readFileSync(path));
   const entries = [];
   let offset = 0;
+  let terminated = false;
 
   while (offset + 512 <= archive.length) {
     const header = archive.subarray(offset, offset + 512);
-    if (header.every((byte) => byte === 0)) break;
+    if (header.every((byte) => byte === 0)) {
+      if (!archive.subarray(offset).every((byte) => byte === 0)) {
+        fail('tarball contains data after its end marker');
+      }
+      terminated = true;
+      break;
+    }
+
+    const expectedChecksum = Number.parseInt(tarString(header, 148, 8).trim(), 8);
+    const checksumHeader = Buffer.from(header);
+    checksumHeader.fill(32, 148, 156);
+    const actualChecksum = checksumHeader.reduce((sum, byte) => sum + byte, 0);
+    if (!Number.isSafeInteger(expectedChecksum) || expectedChecksum !== actualChecksum) {
+      fail('tarball contains an invalid entry checksum');
+    }
+
     const name = tarString(header, 0, 100);
     const prefix = tarString(header, 345, 155);
     const fullName = prefix.length === 0 ? name : `${prefix}/${name}`;
@@ -192,10 +209,13 @@ function tarEntries(path) {
     const size = rawSize.length === 0 ? 0 : Number.parseInt(rawSize, 8);
     if (!Number.isSafeInteger(size) || size < 0) fail('tarball contains an invalid entry size');
     const type = header[156];
-    if (type === 0 || type === 48) entries.push(fullName);
+    if (type !== 0 && type !== 48) fail('tarball contains an unsupported entry type');
+    if (fullName.length === 0) fail('tarball contains an unnamed entry');
+    entries.push(fullName);
     offset += 512 + Math.ceil(size / 512) * 512;
   }
 
+  if (!terminated) fail('tarball has no end marker');
   return entries.sort();
 }
 
@@ -253,6 +273,17 @@ function readInstalledManifest(project) {
   assert.deepEqual(manifest.bugs, { url: BUGS_URL });
   assert.deepEqual(manifest.publishConfig, { access: 'public', registry: REGISTRY });
   for (const key of ['main', 'exports', 'types', 'typings']) assert.equal(manifest[key], undefined);
+  for (const script of [
+    'preinstall',
+    'install',
+    'postinstall',
+    'prepublish',
+    'prepublishOnly',
+    'publish',
+    'postpublish',
+  ]) {
+    assert.equal(manifest.scripts?.[script], undefined, `package must not define ${script}`);
+  }
   assert.ok(
     readFileSync(join(packageRoot, 'dist', 'entrypoint.js'), 'utf8').startsWith('#!/usr/bin/env node\n'),
     'installed entrypoint must retain the Node shebang',
@@ -283,7 +314,7 @@ function installArtifact(root, tarball, env) {
   );
   runRequired(
     npmCommand,
-    ['install', '--save-exact', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+    ['install', '--save-exact', '--no-audit', '--no-fund', tarball],
     { cwd: project, env },
   );
   const { packageRoot } = readInstalledManifest(project);
@@ -297,9 +328,16 @@ function installArtifact(root, tarball, env) {
 function runInstalled(installation, args, options = {}) {
   if (process.platform === 'win32') {
     const command = process.env.ComSpec ?? 'cmd.exe';
-    return run(command, ['/d', '/s', '/c', installation.shim, ...args], {
+    const unsupported = /["%\r\n\u0000]/u;
+    if (unsupported.test(installation.shim) || args.some((argument) => unsupported.test(argument))) {
+      fail('Windows package verification received an unsupported command character');
+    }
+    const commandArguments = args.map((argument) => `"${argument}"`).join(' ');
+    const commandLine = `""${installation.shim}"${commandArguments.length === 0 ? '' : ` ${commandArguments}`}"`;
+    return run(command, ['/d', '/s', '/v:off', '/c', commandLine], {
       cwd: options.cwd,
       env: options.env,
+      windowsVerbatimArguments: true,
     });
   }
   return run(installation.shim, args, { cwd: options.cwd, env: options.env });
@@ -735,6 +773,20 @@ function exerciseManifestChecker(root, tarball) {
   assert.throws(() => assertManifestMatches(manifest), /release artifact (sha256|shasum|integrity|size) mismatch/u);
 }
 
+function exerciseTarEntryTypeGuard(root, tarball) {
+  const archive = gunzipSync(readFileSync(tarball));
+  archive[156] = '5'.charCodeAt(0);
+  archive.fill(32, 148, 156);
+  const checksum = archive.subarray(0, 512).reduce((sum, byte) => sum + byte, 0);
+  Buffer.from(`${checksum.toString(8).padStart(6, '0')}\0 `, 'ascii').copy(archive, 148);
+  const unexpectedEntryTarball = join(root, 'unexpected tar entry type.tgz');
+  writeFileSync(unexpectedEntryTarball, gzipSync(archive));
+  assert.throws(
+    () => tarEntries(unexpectedEntryTarball),
+    /tarball contains an unsupported entry type/u,
+  );
+}
+
 function verify(mode) {
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'skillfoo-package-verifier-'));
   const workRoot = join(temporaryRoot, 'owned workspace with spaces é');
@@ -764,6 +816,7 @@ function verify(mode) {
       assert.ok(Buffer.byteLength(line, 'utf8') <= 160, `registry line exceeds 160 bytes: ${line}`);
     }
     assert.deepEqual([...observedRegistryLines].sort(), [...REGISTRY_LINES].sort());
+    exerciseTarEntryTypeGuard(workRoot, tarball);
     exerciseManifestChecker(workRoot, tarball);
 
     assert.deepEqual(artifactHashes(tarball), before, 'package verification mutated the tarball');

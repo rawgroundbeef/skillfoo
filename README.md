@@ -12,15 +12,18 @@ explicitly keep a repository version authoritative as a local Override.
 
 ## Install
 
-The release candidate is `skillfoo@1.0.0`. After its public release, install that exact
-version with:
+The intended first public release is `skillfoo@1.0.0`. After the public registry serves it,
+install and invoke that exact project-local version with:
 
 ```sh
 npm install --save-exact skillfoo@1.0.0
+npm exec -- skillfoo --version
 ```
 
-The package is not yet published while release readiness is under review. Do not substitute
-a branch, global link, or source checkout for package verification.
+This release-readiness change does not itself publish the package. Do not substitute a branch,
+global link, or source checkout for package verification. The examples below use `skillfoo`
+as the command name; a local installation can invoke it through `npm exec -- skillfoo` or a
+package script.
 
 ## Quickstart
 
