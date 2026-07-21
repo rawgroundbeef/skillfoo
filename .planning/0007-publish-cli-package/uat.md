@@ -59,6 +59,7 @@ publicly installed package; both must expose the documented
    npm ci
    npm run check
    npm run test:package
+   npm run test:release-modes
    ```
 
 2. Create a temporary directory outside the repository. Run
@@ -74,6 +75,9 @@ Expected:
 - `npm run check` typechecks, builds, and runs the complete repository suite.
 - The package verification builds from clean `dist/`, creates a real tarball,
   installs it in an empty temporary project, and invokes the installed shim.
+- The release-mode command verification proves supplied-artifact byte
+  preservation and no repack, exact commit-bound manifest creation/checking,
+  dirty-checkout and tamper rejection, and owned temporary-state cleanup.
 - The tarball identity is `skillfoo@1.0.0`; package manifest, lockfile,
   `skillfoo --version`, tarball filename, and later Git tag agree.
 - The payload contains only `package.json`, `README.md`, `LICENSE`, and the

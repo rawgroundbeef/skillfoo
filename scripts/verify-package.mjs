@@ -1070,8 +1070,8 @@ function forgePackagedManifest(root, tarball, name, mutate) {
   return forgedTarball;
 }
 
-function markerCommand(marker) {
-  const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
+function markerCommand(markerName) {
+  const encodedMarker = Buffer.from(markerName, 'utf8').toString('base64');
   return (
     `node -e "require('node:fs').writeFileSync(` +
     `Buffer.from('${encodedMarker}','base64'),'ran')"`
@@ -1098,17 +1098,25 @@ function exerciseInstallLifecycleManifestGuards(root, tarball, env) {
     'prepare',
     'postprepare',
   ]) {
-    const marker = join(root, `forbidden ${script} marker`);
+    const installationRoot = join(root, `forbidden ${script} install`);
+    const markerName = 'forbidden-lifecycle-ran';
+    const marker = join(
+      installationRoot,
+      'installed consumer project é',
+      'node_modules',
+      PACKAGE_NAME,
+      markerName,
+    );
     const forbiddenTarball = forgePackagedManifest(
       root,
       tarball,
       `forbidden ${script} hook.tgz`,
       (manifest) => {
-        manifest.scripts = { ...manifest.scripts, [script]: markerCommand(marker) };
+        manifest.scripts = { ...manifest.scripts, [script]: markerCommand(markerName) };
       },
     );
     assertRejectedBeforeInstall(
-      join(root, `forbidden ${script} install`),
+      installationRoot,
       forbiddenTarball,
       env,
       new RegExp(`package must not define ${script}`, 'u'),
@@ -1119,14 +1127,22 @@ function exerciseInstallLifecycleManifestGuards(root, tarball, env) {
 
 function exerciseDependencyManifestGuard(root, tarball, env) {
   const dependency = join(root, 'forbidden dependency package');
-  const marker = join(root, 'forbidden dependency marker');
+  const installationRoot = join(root, 'forbidden dependency install');
+  const markerName = 'forbidden-dependency-ran';
+  const marker = join(
+    installationRoot,
+    'installed consumer project é',
+    'node_modules',
+    'yaml',
+    markerName,
+  );
   mkdirSync(dependency);
   writeFileSync(
     join(dependency, 'package.json'),
     `${JSON.stringify({
       name: 'yaml',
       version: '2.5.0',
-      scripts: { preinstall: markerCommand(marker) },
+      scripts: { preinstall: markerCommand(markerName) },
     })}\n`,
   );
   const forbiddenTarball = forgePackagedManifest(
@@ -1139,7 +1155,7 @@ function exerciseDependencyManifestGuard(root, tarball, env) {
   );
 
   assertRejectedBeforeInstall(
-    join(root, 'forbidden dependency install'),
+    installationRoot,
     forbiddenTarball,
     env,
     /package dependencies must exactly match the release manifest/u,
