@@ -42,6 +42,8 @@ const REGISTRY_LINES = [
   'skillfoo: configured local registry not found; verify .skillfoo.yml and filesystem access',
 ];
 
+const CONFIG_PARSE_LINE = 'skillfoo: .skillfoo.yml contains invalid YAML; verify its syntax';
+
 const RUNTIME_FILES = [
   'adapter.js',
   'cli.js',
@@ -596,6 +598,29 @@ function assertUnsafeSources(installation, root, baseEnv, observedRegistryLines)
   const fixture = join(root, 'unsafe registry fixtures');
   mkdirSync(fixture, { recursive: true });
   const sentinel = 'sensitive-value';
+
+  const malformedRoot = join(fixture, 'malformed config');
+  const malformedConsumer = join(malformedRoot, 'consumer');
+  const malformedHome = join(malformedRoot, 'home');
+  mkdirSync(malformedConsumer, { recursive: true });
+  mkdirSync(malformedHome);
+  const malformedEnv = { ...baseEnv, HOME: malformedHome, USERPROFILE: malformedHome };
+  const malformedPath = join(malformedConsumer, '.skillfoo.yml');
+  const malformedContents =
+    `registry: [https://sensitive-user:${sentinel}@example.invalid/skills.git` +
+    '\u001b\n';
+  writeFileSync(malformedPath, malformedContents);
+  const malformedBefore = snapshotTree(malformedConsumer);
+  const malformed = runInstalled(installation, ['status', '--json'], {
+    cwd: malformedConsumer,
+    env: malformedEnv,
+  });
+  assert.deepEqual(malformed, { status: 1, stdout: '', stderr: `${CONFIG_PARSE_LINE}\n` });
+  assert.doesNotMatch(`${malformed.stdout}${malformed.stderr}`, /sensitive|example\.invalid|\u001b/u);
+  assert.equal(snapshotTree(malformedConsumer), malformedBefore);
+  assert.equal(readFileSync(malformedPath, 'utf8'), malformedContents);
+  assert.equal(snapshotTree(malformedHome), '[]');
+
   const cases = [
     [`https://sensitive-user:${sentinel}@example.invalid/skills.git`, REGISTRY_LINES[0]],
     [`https://example.invalid/skills.git?token=${sentinel}`, REGISTRY_LINES[0]],

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
+  CONFIG_PARSE_DIAGNOSTIC,
   createConfigExclusive,
   editOverridePolicy,
   loadConfig,
@@ -44,6 +45,28 @@ test('rejects non-string skill names at the config boundary', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, '.skillfoo.yml'), 'registry: ../skills\nskills: [slice, 42]\n');
     assert.throws(() => loadConfig(dir), /skills.*list of names/);
+  });
+});
+
+test('maps YAML syntax errors to a fixed diagnostic without exposing source text', () => {
+  withTempDir((dir) => {
+    const sentinel = 'sensitive-config-value';
+    const contents =
+      `registry: [https://sensitive-user:${sentinel}@example.invalid/skills.git` +
+      '\u001b\n';
+    const path = join(dir, '.skillfoo.yml');
+    writeFileSync(path, contents);
+
+    assert.throws(
+      () => loadConfig(dir),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, CONFIG_PARSE_DIAGNOSTIC);
+        assert.doesNotMatch(error.message, /sensitive|example\.invalid|\u001b/u);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(path, 'utf8'), contents);
   });
 });
 
@@ -213,7 +236,7 @@ test('rejects every malformed Override mapping shape', () => {
       ['overrides: { ../alpha: local }\n', /unsafe skill name/],
       ['overrides:\n  42: local\n', /keys must be string/],
       ['overrides:\n  ? [alpha, beta]\n  : local\n', /keys must be string/],
-      ['overrides:\n  alpha: local\n  alpha: local\n', /Map keys must be unique/],
+      ['overrides:\n  alpha: local\n  alpha: local\n', new RegExp(CONFIG_PARSE_DIAGNOSTIC)],
     ];
     for (const [overrides, expected] of cases) {
       writeFileSync(join(dir, '.skillfoo.yml'), `registry: ../skills\n${overrides}`);
