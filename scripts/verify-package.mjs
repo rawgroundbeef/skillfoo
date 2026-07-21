@@ -710,11 +710,11 @@ function assertDiscardedGitOutput(installation, root, baseEnv, observedRegistryL
 }
 
 function assertGitCacheContract(installation, root, baseEnv, observedRegistryLines) {
-  const fixture = join(root, 'git-cache-fixtures');
-  const home = join(fixture, 'home');
+  const fixture = root;
+  const home = join(fixture, 'h');
   const cacheRoot = join(home, '.skillfoo', 'registries');
-  const registry = join(fixture, 'ordinary-registry');
-  const consumer = join(fixture, 'ordinary-consumer');
+  const registry = join(fixture, 'r');
+  const consumer = join(fixture, 'c');
   mkdirSync(home, { recursive: true });
   mkdirSync(consumer, { recursive: true });
   initializeGitRegistry(registry, 'alpha');
@@ -740,7 +740,7 @@ function assertGitCacheContract(installation, root, baseEnv, observedRegistryLin
 
   const firstRegistry = join(fixture, 'a-b');
   const secondRegistry = join(fixture, 'a', 'b');
-  const legacyRegistry = join(fixture, 'legacy');
+  const legacyRegistry = join(fixture, 'l');
   initializeGitRegistry(firstRegistry, 'first-source');
   initializeGitRegistry(secondRegistry, 'second-source');
   initializeGitRegistry(legacyRegistry, 'legacy-source');
@@ -1041,6 +1041,7 @@ function exerciseUnsupportedManifestFieldGuards(root, tarball, env) {
 
 function verify(mode) {
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'skillfoo-package-verifier-'));
+  const gitTemporaryRoot = mkdtempSync(join(tmpdir(), 'sf-g-'));
   const workRoot = join(temporaryRoot, 'owned workspace with spaces é');
   mkdirSync(workRoot);
   const env = isolatedEnvironment(workRoot);
@@ -1063,7 +1064,7 @@ function verify(mode) {
     assertStatusContract(installation, workRoot, env, observedRegistryLines);
     assertUnsafeSources(installation, workRoot, env, observedRegistryLines);
     assertDiscardedGitOutput(installation, workRoot, env, observedRegistryLines);
-    assertGitCacheContract(installation, temporaryRoot, env, observedRegistryLines);
+    assertGitCacheContract(installation, gitTemporaryRoot, env, observedRegistryLines);
 
     for (const line of REGISTRY_LINES) {
       assert.ok(Buffer.byteLength(line, 'utf8') <= 160, `registry line exceeds 160 bytes: ${line}`);
@@ -1089,6 +1090,7 @@ function verify(mode) {
     );
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true });
+    rmSync(gitTemporaryRoot, { recursive: true, force: true });
   }
 }
 
