@@ -9,6 +9,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -278,7 +279,7 @@ test('reports active adapter conflicts, preserves them in sync, and skips correc
   const adapterPath = join(state.consumer, '.claude', 'skills', 'alpha');
 
   rmSync(join(state.consumer, 'AGENTS.md'));
-  rmSync(adapterPath);
+  unlinkSync(adapterPath);
   const missing = planReconciliation(state.consumer);
   assert.equal(missing.projections[0]?.state, 'update');
   assert.equal(adapter(missing, 'alpha').state, 'update');
@@ -291,7 +292,7 @@ test('reports active adapter conflicts, preserves them in sync, and skips correc
   await sync(state.consumer, { output: () => undefined });
   assert.equal(lstatSync(adapterPath).ino, originalInode);
 
-  rmSync(adapterPath);
+  unlinkSync(adapterPath);
   writeFileSync(adapterPath, 'foreign adapter\n');
   const plan = planReconciliation(state.consumer);
   assert.deepEqual(
@@ -421,7 +422,7 @@ test('degrades missing Override content without recreating its row or adapter', 
   const agentsPath = join(state.consumer, 'AGENTS.md');
   const withoutRow = readFileSync(agentsPath, 'utf8').replace(/^.*\[alpha\].*\n/m, '');
   writeFileSync(agentsPath, withoutRow);
-  rmSync(adapterPath);
+  unlinkSync(adapterPath);
   await sync(state.consumer, { output: () => undefined });
   assert.equal(existsSync(emitted), false);
   assert.doesNotMatch(readFileSync(agentsPath, 'utf8'), /\[alpha\]/);
@@ -441,7 +442,7 @@ test('preserves an unsafe Override path and suppresses target projection synthes
   writeFileSync(emitted, 'unsafe Override shape\n');
   const agentsPath = join(state.consumer, 'AGENTS.md');
   writeFileSync(agentsPath, readFileSync(agentsPath, 'utf8').replace(/^.*\[alpha\].*\n/m, ''));
-  rmSync(adapterPath);
+  unlinkSync(adapterPath);
 
   const plan = planReconciliation(state.consumer);
   assert.deepEqual(

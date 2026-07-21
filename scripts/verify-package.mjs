@@ -114,14 +114,35 @@ function parseArguments(argv) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  let executable = command;
+  let spawnArguments = args;
+  let windowsVerbatimArguments = options.windowsVerbatimArguments ?? false;
+
+  if (process.platform === 'win32' && command.toLowerCase().endsWith('.cmd')) {
+    const unsupported = /["%\r\n\u0000]/u;
+    if (unsupported.test(command) || args.some((argument) => unsupported.test(argument))) {
+      fail('Windows package verification received an unsupported command character');
+    }
+    const commandArguments = args.map((argument) => `"${argument}"`).join(' ');
+    executable = process.env.ComSpec ?? 'cmd.exe';
+    spawnArguments = [
+      '/d',
+      '/s',
+      '/v:off',
+      '/c',
+      `""${command}"${commandArguments.length === 0 ? '' : ` ${commandArguments}`}"`,
+    ];
+    windowsVerbatimArguments = true;
+  }
+
+  const result = spawnSync(executable, spawnArguments, {
     cwd: options.cwd,
     env: options.env,
     encoding: 'utf8',
     input: options.input,
     maxBuffer: 16 * 1024 * 1024,
     shell: false,
-    windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
+    windowsVerbatimArguments,
     windowsHide: true,
   });
   if (result.error !== undefined) throw result.error;

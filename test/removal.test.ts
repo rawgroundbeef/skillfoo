@@ -8,6 +8,7 @@ import {
   readlinkSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -103,7 +104,7 @@ test('removes an expected dangling adapter when the emitted directory is already
 test('removes an unchanged emitted directory when its adapter is already absent', () => {
   const state = fixture();
   try {
-    rmSync(state.adapter);
+    unlinkSync(state.adapter);
     assert.deepEqual(removeManagedSkill(candidate(state.root), state.hash), { status: 'removed' });
     assert.equal(existsSync(state.emitted), false);
   } finally {
