@@ -628,6 +628,16 @@ function assertUnsafeSources(installation, root, baseEnv, observedRegistryLines)
     [`file://sensitive-user@localhost/tmp/${sentinel}.git`, REGISTRY_LINES[0]],
     [`ssh://git:${sentinel}@example.invalid/skills.git`, REGISTRY_LINES[0]],
     [`ssh://git@example.invalid/skills.git?token=${sentinel}`, REGISTRY_LINES[0]],
+    [`github.com/example/skills?token=${sentinel}`, REGISTRY_LINES[0]],
+    [`gitlab.com/example/skills#${sentinel}`, REGISTRY_LINES[0]],
+    [`git@example.invalid:example/skills.git?token=${sentinel}`, REGISTRY_LINES[0]],
+    [`git://example.invalid/skills.git?token=${sentinel}`, REGISTRY_LINES[0]],
+    [`sensitive-user:${sentinel}@example.invalid/skills.git`, REGISTRY_LINES[0]],
+    [`example.invalid/skills.git?token=${sentinel}`, REGISTRY_LINES[0]],
+    [`example.invalid/skills.git#${sentinel}`, REGISTRY_LINES[0]],
+    [`example.invalid/skills?token=${sentinel}.git`, REGISTRY_LINES[0]],
+    [`example.invalid/skills#${sentinel}.git`, REGISTRY_LINES[0]],
+    [`git+ssh:sensitive-user:${sentinel}@example.invalid/skills.git`, REGISTRY_LINES[0]],
     [`https://example.invalid/skills-${sentinel}-\u001b.git`, REGISTRY_LINES[1]],
   ];
 

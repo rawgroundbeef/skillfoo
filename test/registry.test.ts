@@ -60,6 +60,41 @@ function writeSkill(registry: string, description: string): void {
   );
 }
 
+test('normalizes validated hosted shorthands to their exact clone URL', () => {
+  assert.equal(
+    normalizeCloneUrl('github.com/example/skills'),
+    'https://github.com/example/skills.git',
+  );
+  assert.equal(
+    normalizeCloneUrl('gitlab.com/example/skills.git'),
+    'https://gitlab.com/example/skills.git',
+  );
+  assert.equal(
+    normalizeCloneUrl('example.com/example/skills.git'),
+    'https://example.com/example/skills.git',
+  );
+  assert.throws(
+    () => normalizeCloneUrl('github.com/example/skills?token=sensitive-value'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('user:sensitive-value@example.com/example/skills.git'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('example.com/example/skills.git?token=sensitive-value'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('example.com/example/skills.git#sensitive-value'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+  assert.throws(
+    () => normalizeCloneUrl('example.com/example/skills?token=sensitive-value.git'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
+});
+
 test('catalogs only skill directories in deterministic name order', () => {
   const root = mkdtempSync(join(tmpdir(), 'skillfoo-registry-catalog-'));
   try {

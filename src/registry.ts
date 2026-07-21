@@ -2,46 +2,22 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, posix, resolve, win32 } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   REGISTRY_DIAGNOSTICS,
+  isExplicitLocalRegistryPath,
+  isRemoteRegistrySource,
+  normalizeRegistryCloneUrl,
   registryFailure,
   validateRegistrySource,
 } from './registry-source.js';
 
-const GIT_PREFIXES = [
-  'http://',
-  'https://',
-  'git@',
-  'ssh://',
-  'file://',
-  'github.com/',
-  'gitlab.com/',
-  'bitbucket.org/',
-];
-
 export function isGitRegistry(spec: string): boolean {
-  const lower = spec.toLowerCase();
-  return GIT_PREFIXES.some((prefix) => lower.startsWith(prefix)) || spec.endsWith('.git');
-}
-
-function isExplicitLocalPath(spec: string): boolean {
-  return (
-    spec === '.' ||
-    spec === '..' ||
-    spec.startsWith('./') ||
-    spec.startsWith('../') ||
-    spec.startsWith('.\\') ||
-    spec.startsWith('..\\') ||
-    posix.isAbsolute(spec) ||
-    win32.isAbsolute(spec)
-  );
+  return isRemoteRegistrySource(spec);
 }
 
 export function normalizeCloneUrl(spec: string): string {
-  validateRegistrySource(spec);
-  if (/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/iu.test(spec)) return spec;
-  return `https://${spec.replace(/\.git$/, '')}.git`;
+  return normalizeRegistryCloneUrl(spec);
 }
 
 export function cacheDirFor(url: string, cacheRoot: string): string {
@@ -90,7 +66,7 @@ export interface RegistryCatalog {
 
 export function resolveRegistry(spec: string, cwd: string, options: RegistryOptions = {}): string {
   validateRegistrySource(spec);
-  if (isExplicitLocalPath(spec) || !isGitRegistry(spec)) return resolve(cwd, spec);
+  if (isExplicitLocalRegistryPath(spec) || !isGitRegistry(spec)) return resolve(cwd, spec);
 
   const url = normalizeCloneUrl(spec);
   const cacheRoot = options.cacheRoot ?? join(homedir(), '.skillfoo', 'registries');
@@ -155,7 +131,7 @@ export function resolveRegistryCatalog(
     skills = listRegistrySkills(directory);
   } catch {
     throw registryFailure(
-      isGitRegistry(spec) && !isExplicitLocalPath(spec)
+      isGitRegistry(spec) && !isExplicitLocalRegistryPath(spec)
         ? REGISTRY_DIAGNOSTICS.fetchFailure
         : REGISTRY_DIAGNOSTICS.localMissing,
     );

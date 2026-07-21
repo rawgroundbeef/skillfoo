@@ -202,6 +202,11 @@ registry access:
   or fragment;
 - reject `ssh://` URLs with a password, query, or fragment while continuing to
   allow an ordinary SSH username;
+- validate every non-local Git source as the exact URL passed to Git after
+  semantic expansion, including hosted/generic shorthands and `git@host:path`,
+  rejecting credentials, query, or fragment components before output;
+- reject unsupported scheme-like sources instead of treating them as local
+  paths;
 - reject ASCII and C1 control characters in every registry source before it can
   be classified, rendered, accessed, or used in a cache path;
 - keep credential-free shorthands, `git@host:path`, SSH URLs, HTTP(S) URLs,

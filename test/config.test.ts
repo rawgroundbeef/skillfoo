@@ -91,6 +91,10 @@ test('accepts credential-free registry forms and rejects unsafe URL components g
     'ssh://git@example.com/example/skills.git',
     'https://example.com/example/skills.git',
     'file:///tmp/example/skills.git',
+    'C://skills-registry',
+    String.raw`C:\skills-registry`,
+    String.raw`\\server\share\skills-registry`,
+    './registry?local-value.git',
   ]) {
     assert.equal(validateRegistrySource(source), source);
   }
@@ -106,6 +110,18 @@ test('accepts credential-free registry forms and rejects unsafe URL components g
     `ssh://git:${sensitive}@example.com/skills.git`,
     `ssh://git@example.com/skills.git?token=${sensitive}`,
     `ssh://git@example.com/skills.git#${sensitive}`,
+    `github.com/example/skills?token=${sensitive}`,
+    `gitlab.com/example/skills#${sensitive}`,
+    `bitbucket.org/example/skills?token=${sensitive}`,
+    `git@example.com:example/skills.git?token=${sensitive}`,
+    `git@example.com:example/skills.git#${sensitive}`,
+    `git://example.com/skills.git?token=${sensitive}`,
+    `sensitive-user:${sensitive}@example.com/skills.git`,
+    `example.com/skills.git?token=${sensitive}`,
+    `example.com/skills.git#${sensitive}`,
+    `example.com/skills?token=${sensitive}.git`,
+    `example.com/skills#${sensitive}.git`,
+    `git+ssh:sensitive-user:${sensitive}@example.com/skills.git`,
   ]) {
     assert.throws(
       () => validateRegistrySource(source),
@@ -121,6 +137,11 @@ test('accepts credential-free registry forms and rejects unsafe URL components g
       source,
     );
   }
+
+  assert.throws(
+    () => validateRegistrySource('git://example.com/skills.git'),
+    new RegExp(REGISTRY_DIAGNOSTICS.unsafeComponents.replace(/^skillfoo: /u, '')),
+  );
 });
 
 test('rejects ASCII and C1 registry controls before rendering or loading config', () => {

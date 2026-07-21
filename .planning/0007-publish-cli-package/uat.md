@@ -175,8 +175,10 @@ Expected:
    sentinel userinfo `sensitive-user:sensitive-value`, record the config bytes,
    and run installed `skillfoo status --json`, capturing both streams/status.
 2. Repeat in separate loaded configs with a credential-free host plus a query
-   containing `sensitive-value`, and with visible sentinel text plus an
-   ASCII/C1 terminal control. Record each original config byte-for-byte.
+   containing `sensitive-value`; with hosted and generic `.git` shorthands,
+   `git@host:path`, and unsupported scheme-like sources carrying credentials,
+   the same query, or a fragment; and with visible sentinel text plus an ASCII/C1
+   terminal control. Record each original config byte-for-byte.
 3. Exercise the same unsafe sources through non-interactive init in fresh
    disposable consumers.
 4. Put a controlled fake `git` executable earlier in `PATH` using the

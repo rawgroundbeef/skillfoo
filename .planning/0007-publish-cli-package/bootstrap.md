@@ -95,8 +95,11 @@ pull request or the slice workflow reaches that authorized step.
 - Before config creation, registry access, cache mutation, or consumer writes,
   reject HTTP(S) and `file://` registry URLs with userinfo, query, or fragment,
   and reject `ssh://` URLs with a password, query, or fragment. Allow ordinary
-  SSH usernames and credential-free local/remote Git forms. Never echo the
-  rejected URL or sensitive components; use out-of-band Git authentication.
+  SSH usernames and credential-free local/remote Git forms. Validate every
+  non-local Git source as the exact URL passed to Git after semantic expansion,
+  including hosted/generic shorthands and `git@host:path`, and reject unsupported
+  scheme-like sources. Never echo the rejected URL or sensitive components; use
+  out-of-band Git authentication.
 - Treat every registry source and Git diagnostic as untrusted terminal data.
   Reject control characters before classification or output. Never relay raw
   Git/helper/remote stderr or interpolate registry/external text into progress
