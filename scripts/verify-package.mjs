@@ -180,6 +180,10 @@ function tarString(buffer, start, length) {
 
 function tarEntries(path) {
   const archive = gunzipSync(readFileSync(path));
+  return parseTarArchive(archive).map(({ name }) => name).sort();
+}
+
+function parseTarArchive(archive) {
   const entries = [];
   let offset = 0;
   let terminated = false;
@@ -211,12 +215,20 @@ function tarEntries(path) {
     const type = header[156];
     if (type !== 0 && type !== 48) fail('tarball contains an unsupported entry type');
     if (fullName.length === 0) fail('tarball contains an unnamed entry');
-    entries.push(fullName);
+    const dataOffset = offset + 512;
+    if (dataOffset + size > archive.length) fail('tarball entry extends past the archive');
+    entries.push({
+      name: fullName,
+      headerOffset: offset,
+      dataOffset,
+      size,
+      contents: Buffer.from(archive.subarray(dataOffset, dataOffset + size)),
+    });
     offset += 512 + Math.ceil(size / 512) * 512;
   }
 
   if (!terminated) fail('tarball has no end marker');
-  return entries.sort();
+  return entries;
 }
 
 function assertPayload(path, packFiles) {
@@ -259,9 +271,7 @@ function packTemporaryArtifact(root, env) {
   return path;
 }
 
-function readInstalledManifest(project) {
-  const packageRoot = join(project, 'node_modules', PACKAGE_NAME);
-  const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+function assertPackageManifest(manifest) {
   assert.equal(manifest.name, PACKAGE_NAME);
   assert.equal(manifest.version, PACKAGE_VERSION);
   assert.equal(manifest.type, 'module');
@@ -284,6 +294,21 @@ function readInstalledManifest(project) {
   ]) {
     assert.equal(manifest.scripts?.[script], undefined, `package must not define ${script}`);
   }
+}
+
+function readPackagedManifest(tarball) {
+  const archive = parseTarArchive(gunzipSync(readFileSync(tarball)));
+  const manifestEntry = archive.find(({ name }) => name === 'package/package.json');
+  assert.ok(manifestEntry, 'tarball must contain package/package.json');
+  const manifest = JSON.parse(manifestEntry.contents.toString('utf8'));
+  assertPackageManifest(manifest);
+  return manifest;
+}
+
+function readInstalledManifest(project) {
+  const packageRoot = join(project, 'node_modules', PACKAGE_NAME);
+  const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+  assertPackageManifest(manifest);
   assert.ok(
     readFileSync(join(packageRoot, 'dist', 'entrypoint.js'), 'utf8').startsWith('#!/usr/bin/env node\n'),
     'installed entrypoint must retain the Node shebang',
@@ -776,15 +801,60 @@ function exerciseManifestChecker(root, tarball) {
 function exerciseTarEntryTypeGuard(root, tarball) {
   const archive = gunzipSync(readFileSync(tarball));
   archive[156] = '5'.charCodeAt(0);
-  archive.fill(32, 148, 156);
-  const checksum = archive.subarray(0, 512).reduce((sum, byte) => sum + byte, 0);
-  Buffer.from(`${checksum.toString(8).padStart(6, '0')}\0 `, 'ascii').copy(archive, 148);
+  writeTarChecksum(archive, 0);
   const unexpectedEntryTarball = join(root, 'unexpected tar entry type.tgz');
   writeFileSync(unexpectedEntryTarball, gzipSync(archive));
   assert.throws(
     () => tarEntries(unexpectedEntryTarball),
     /tarball contains an unsupported entry type/u,
   );
+}
+
+function writeTarChecksum(archive, headerOffset) {
+  archive.fill(32, headerOffset + 148, headerOffset + 156);
+  const checksum = archive
+    .subarray(headerOffset, headerOffset + 512)
+    .reduce((sum, byte) => sum + byte, 0);
+  Buffer.from(`${checksum.toString(8).padStart(6, '0')}\0 `, 'ascii').copy(
+    archive,
+    headerOffset + 148,
+  );
+}
+
+function exercisePreinstallManifestGuard(root, tarball) {
+  const archive = gunzipSync(readFileSync(tarball));
+  const manifestEntry = parseTarArchive(archive).find(
+    ({ name }) => name === 'package/package.json',
+  );
+  assert.ok(manifestEntry);
+  const manifest = JSON.parse(manifestEntry.contents.toString('utf8'));
+  const marker = join(root, 'forbidden lifecycle marker');
+  const encodedMarker = Buffer.from(marker, 'utf8').toString('base64');
+  manifest.scripts = {
+    ...manifest.scripts,
+    preinstall:
+      `node -e "require('node:fs').writeFileSync(` +
+      `Buffer.from('${encodedMarker}','base64'),'ran')"`,
+  };
+  const contents = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
+  const capacity = Math.ceil(manifestEntry.size / 512) * 512;
+  assert.ok(contents.length <= capacity, 'lifecycle regression manifest exceeds tar entry space');
+
+  archive.fill(0, manifestEntry.dataOffset, manifestEntry.dataOffset + capacity);
+  contents.copy(archive, manifestEntry.dataOffset);
+  Buffer.from(`${contents.length.toString(8).padStart(11, '0')}\0`, 'ascii').copy(
+    archive,
+    manifestEntry.headerOffset + 124,
+  );
+  writeTarChecksum(archive, manifestEntry.headerOffset);
+
+  const forbiddenTarball = join(root, 'forbidden lifecycle hook.tgz');
+  writeFileSync(forbiddenTarball, gzipSync(archive));
+  assert.throws(
+    () => readPackagedManifest(forbiddenTarball),
+    /package must not define preinstall/u,
+  );
+  assert.equal(existsSync(marker), false, 'forbidden lifecycle hook ran before rejection');
 }
 
 function verify(mode) {
@@ -802,6 +872,7 @@ function verify(mode) {
   const before = artifactHashes(tarball);
   try {
     assertPayload(tarball);
+    readPackagedManifest(tarball);
     const installation = installArtifact(workRoot, tarball, env);
     readInstalledManifest(installation.project);
     assertExecutableContract(installation, workRoot, env);
@@ -817,6 +888,7 @@ function verify(mode) {
     }
     assert.deepEqual([...observedRegistryLines].sort(), [...REGISTRY_LINES].sort());
     exerciseTarEntryTypeGuard(workRoot, tarball);
+    exercisePreinstallManifestGuard(workRoot, tarball);
     exerciseManifestChecker(workRoot, tarball);
 
     assert.deepEqual(artifactHashes(tarball), before, 'package verification mutated the tarball');
