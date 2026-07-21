@@ -155,6 +155,13 @@ function runRequired(command, args, options = {}) {
 }
 
 function runNpmRequired(args, options = {}) {
+  if (
+    args[0] === 'pack' &&
+    options.env?.SKILLFOO_PACKAGE_VERIFIER_FORBID_PACK === '1'
+  ) {
+    fail('npm pack is forbidden while verifying a supplied release artifact');
+  }
+
   if (process.platform !== 'win32') return runRequired('npm', args, options);
 
   const configuredCli = process.env.npm_execpath;
@@ -891,8 +898,8 @@ function exerciseManifestChecker(root, tarball) {
   assert.throws(() => assertManifestMatches(manifest), /release artifact (sha256|shasum|integrity|size) mismatch/u);
 }
 
-function verifierTemporaryEntries() {
-  return readdirSync(tmpdir())
+function verifierTemporaryEntries(root) {
+  return readdirSync(root)
     .filter(
       (name) =>
         name.startsWith('skillfoo-package-verifier-') || name.startsWith('sf-g-'),
@@ -915,6 +922,15 @@ function exerciseReleaseModeCommands() {
     const tarballsBefore = listFiles(workRoot).filter((path) => path.endsWith('.tgz'));
     const manifestPath = join(workRoot, 'release-manifest.json');
     const verifier = fileURLToPath(import.meta.url);
+    const childTemporaryRoot = join(workRoot, 'child temporary roots');
+    mkdirSync(childTemporaryRoot);
+    const suppliedEnv = {
+      ...env,
+      SKILLFOO_PACKAGE_VERIFIER_FORBID_PACK: '1',
+      TEMP: childTemporaryRoot,
+      TMP: childTemporaryRoot,
+      TMPDIR: childTemporaryRoot,
+    };
 
     const supplied = run(process.execPath, [
       verifier,
@@ -922,8 +938,9 @@ function exerciseReleaseModeCommands() {
       tarball,
       '--manifest',
       manifestPath,
-    ], { cwd: repositoryRoot, env });
+    ], { cwd: repositoryRoot, env: suppliedEnv });
     assert.deepEqual(supplied, { status: 0, stdout: verificationLine(), stderr: '' });
+    assert.deepEqual(verifierTemporaryEntries(childTemporaryRoot), []);
     assert.deepEqual(artifactHashes(tarball), before, 'supplied verification mutated the tarball');
     assert.deepEqual(
       listFiles(workRoot).filter((path) => path.endsWith('.tgz')),
@@ -933,6 +950,10 @@ function exerciseReleaseModeCommands() {
 
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.deepEqual(manifest, releaseManifest(tarball));
+    assert.equal(
+      manifest.commit,
+      runRequired(gitCommand, ['rev-parse', 'HEAD'], { cwd: repositoryRoot }).stdout.trim(),
+    );
     const checked = run(process.execPath, [verifier, '--check-manifest', manifestPath], {
       cwd: repositoryRoot,
       env,
@@ -942,6 +963,26 @@ function exerciseReleaseModeCommands() {
       stdout: 'release manifest matches the retained tarball\n',
       stderr: '',
     });
+
+    const dirtySentinel = join(
+      repositoryRoot,
+      `.skillfoo-release-mode-dirty-sentinel-${String(process.pid)}`,
+    );
+    const dirtyManifestPath = join(workRoot, 'dirty-release-manifest.json');
+    writeFileSync(dirtySentinel, 'release-mode dirty-checkout sentinel\n', { flag: 'wx' });
+    try {
+      const dirty = run(
+        process.execPath,
+        [verifier, '--tarball', tarball, '--manifest', dirtyManifestPath],
+        { cwd: repositoryRoot, env: suppliedEnv },
+      );
+      assert.notEqual(dirty.status, 0);
+      assert.equal(dirty.stdout, '');
+      assert.match(dirty.stderr, /release manifest creation requires a clean source checkout/u);
+      assert.equal(existsSync(dirtyManifestPath), false);
+    } finally {
+      rmSync(dirtySentinel, { force: true });
+    }
 
     const tamperedDirectory = join(workRoot, 'tampered artifact');
     mkdirSync(tamperedDirectory);
@@ -967,14 +1008,13 @@ function exerciseReleaseModeCommands() {
     mkdirSync(invalidDirectory);
     const invalidTarball = join(invalidDirectory, `${PACKAGE_NAME}-${PACKAGE_VERSION}.tgz`);
     writeFileSync(invalidTarball, 'not a package tarball\n');
-    const temporaryEntriesBefore = verifierTemporaryEntries();
     const invalid = run(process.execPath, [verifier, '--tarball', invalidTarball], {
       cwd: repositoryRoot,
-      env,
+      env: suppliedEnv,
     });
     assert.notEqual(invalid.status, 0);
     assert.equal(invalid.stdout, '');
-    assert.deepEqual(verifierTemporaryEntries(), temporaryEntriesBefore);
+    assert.deepEqual(verifierTemporaryEntries(childTemporaryRoot), []);
 
     process.stdout.write('release-mode command verification passed\n');
   } finally {
@@ -1147,6 +1187,8 @@ function exerciseUnsupportedManifestFieldGuards(root, tarball, env) {
 }
 
 function verify(mode) {
+  if (mode.manifest !== undefined) assertCleanReleaseSource();
+
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'skillfoo-package-verifier-'));
   let gitTemporaryRoot;
   try {
