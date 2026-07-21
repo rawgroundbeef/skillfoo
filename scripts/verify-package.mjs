@@ -77,6 +77,9 @@ const DEVELOPMENT_DEPENDENCIES = {
 
 const gitCommand = process.platform === 'win32' ? 'git.exe' : 'git';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const expectedPackageManifest = JSON.parse(
+  readFileSync(join(repositoryRoot, 'package.json'), 'utf8'),
+);
 
 function fail(message) {
   throw new Error(message);
@@ -317,6 +320,10 @@ function assertPackageManifest(manifest) {
     'peerDependenciesMeta',
     'bundledDependencies',
     'bundleDependencies',
+    'private',
+    'os',
+    'cpu',
+    'libc',
   ]) {
     assert.equal(manifest[key], undefined, `package must not define ${key}`);
   }
@@ -335,6 +342,11 @@ function assertPackageManifest(manifest) {
   ]) {
     assert.equal(manifest.scripts?.[script], undefined, `package must not define ${script}`);
   }
+  assert.deepEqual(
+    manifest,
+    expectedPackageManifest,
+    'package manifest must exactly match the release source',
+  );
 }
 
 function readPackagedManifest(tarball) {
@@ -899,7 +911,9 @@ function assertRejectedBeforeInstall(root, tarball, env, expected, marker) {
     readPackagedManifest(tarball);
     installArtifact(root, tarball, env);
   }, expected);
-  assert.equal(existsSync(marker), false, 'forbidden install code ran before rejection');
+  if (marker !== undefined) {
+    assert.equal(existsSync(marker), false, 'forbidden install code ran before rejection');
+  }
 }
 
 function exerciseInstallLifecycleManifestGuards(root, tarball, env) {
@@ -961,6 +975,45 @@ function exerciseDependencyManifestGuard(root, tarball, env) {
   );
 }
 
+function exerciseUnsupportedManifestFieldGuards(root, tarball, env) {
+  for (const [field, value] of [
+    ['private', true],
+    ['os', [process.platform]],
+    ['cpu', [process.arch]],
+    ['libc', ['glibc']],
+  ]) {
+    const forbiddenTarball = forgePackagedManifest(
+      root,
+      tarball,
+      `forbidden ${field} field.tgz`,
+      (manifest) => {
+        manifest[field] = value;
+      },
+    );
+    assertRejectedBeforeInstall(
+      join(root, `forbidden ${field} install`),
+      forbiddenTarball,
+      env,
+      new RegExp(`package must not define ${field}`, 'u'),
+    );
+  }
+
+  const unexpectedTarball = forgePackagedManifest(
+    root,
+    tarball,
+    'unexpected manifest field.tgz',
+    (manifest) => {
+      manifest.unexpectedReleaseField = true;
+    },
+  );
+  assertRejectedBeforeInstall(
+    join(root, 'unexpected manifest field install'),
+    unexpectedTarball,
+    env,
+    /package manifest must exactly match the release source/u,
+  );
+}
+
 function verify(mode) {
   const temporaryRoot = mkdtempSync(join(tmpdir(), 'skillfoo-package-verifier-'));
   const workRoot = join(temporaryRoot, 'owned workspace with spaces é');
@@ -994,6 +1047,7 @@ function verify(mode) {
     exerciseTarEntryTypeGuard(workRoot, tarball);
     exerciseInstallLifecycleManifestGuards(workRoot, tarball, env);
     exerciseDependencyManifestGuard(workRoot, tarball, env);
+    exerciseUnsupportedManifestFieldGuards(workRoot, tarball, env);
     exerciseManifestChecker(workRoot, tarball);
 
     assert.deepEqual(artifactHashes(tarball), before, 'package verification mutated the tarball');
